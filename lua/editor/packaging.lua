@@ -22,6 +22,12 @@ function install(package)
 	}
 end
 
+function install_and_run(package, cmd)
+  require('pckr').add{
+    { package, run = cmd }
+  }
+end
+
 ---require('pckr').add{
   -- My plugins here
   -- 'foo1/bar1.nvim';

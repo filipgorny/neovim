@@ -1,0 +1,3 @@
+install("MunifTanjim/nui.nvim")
+
+

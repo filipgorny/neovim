@@ -1,6 +1,12 @@
 function setup()
+  -- Load core packages
   require("editor/config")
   require("editor/packaging")
+  
+  -- Load the common functions
+  require("utils/components")
+
+  -- Load the plugins
   require("editor/keymap")
   require("editor/telescope")
   require("editor/tree")
@@ -14,15 +20,15 @@ function setup()
   require("editor/git")
   require("editor/line")
   require("editor/terminal")
-  require("editor/pairs")
-  require("editor/tree-sitter")
   require("editor/projects")
-  require("editor/org")
+  require("editor/session")
+  require("editor/emoji")
 end
 
 function initialize() 
   setup()
   run_config()
+
 
   require("config/preferences")
   require("config/keys")
