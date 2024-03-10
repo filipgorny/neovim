@@ -1,6 +1,4 @@
-
 function setup()
-  require("editor/preferences")
   require("editor/config")
   require("editor/packaging")
   require("editor/keymap")
@@ -9,6 +7,14 @@ function setup()
   require("editor/theming")
   require("editor/dotenv")
   require("editor/chatgpt")
+  require("editor/coc")
+  require("editor/fzf")
+  require("editor/notifications")
+  require("editor/copilot")
+  require("editor/git")
+  require("editor/preferences")
+  require("editor/line")
+  require("editor/terminal")
 end
 
 setup()

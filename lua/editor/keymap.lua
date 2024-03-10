@@ -32,7 +32,7 @@ keys = {
 map_modal("we", ":tabnew<CR>", { desc = "Opens new tab" }) 
 map_all("<C-k>", ":-tabnext<CR>", { desc = "Goes to previous tab." })
 map_all("<C-j>", ":+tabnext<CR>", { desc = "Goes to next tab." })
-map_all("<S-q>", ":tabclose<CR>", { desc = "Closes the tab." })
+map_all("<S-q>", ":q<CR>", { desc = "Closes the tab." })
 
 -- saving
 map_all("wq", "<Esc> :w<CR>", { desc = "Saves the file and exits insert mode" })
