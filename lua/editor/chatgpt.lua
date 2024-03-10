@@ -4,6 +4,15 @@ install("folke/trouble.nvim")
 install("nvim-telescope/telescope.nvim")
 install("jackMort/ChatGPT.nvim")
 
-require("chatgpt").setup()
+configure(function () 
+	require("chatgpt").setup({
+    --api_key_cmd = "echo \"$OPEN_API_KEY\"",
+    chat = {
+      keymaps = {
+        submit = "<CR>"
+      }
+    }
+  })
 
-keys.map_all("<leader>c", "<Esc>:ChatGPT<CR>")
+	keys.map_all("<leader>c", "<Esc>:ChatGPT<CR>")
+end)

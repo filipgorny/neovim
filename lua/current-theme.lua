@@ -1,1 +1,1 @@
-vim.cmd("colorscheme PaperColor")
+vim.cmd("colorscheme carbonfox")

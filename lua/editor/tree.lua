@@ -9,7 +9,8 @@ vim.g.loaded_netrwPlugin = 1
 vim.opt.termguicolors = true
 
 -- empty setup using defaults
-require("nvim-tree").setup()
-
-keys.map_all("<C-n>", "<Esc>:NvimTreeToggle<CR>")
+configure(function ()
+  require("nvim-tree").setup()
+  keys.map_all("<C-n>", "<Esc>:NvimTreeToggle<CR>")
+end)
 
