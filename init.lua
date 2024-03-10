@@ -12,12 +12,12 @@ function setup()
   require("editor/notifications")
   require("editor/copilot")
   require("editor/git")
-  require("editor/preferences")
   require("editor/line")
   require("editor/terminal")
 end
 
 setup()
-
 run_config()
 
+require("config/preferences")
+require("config/keys")
