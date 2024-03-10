@@ -1,2 +1,7 @@
 require("editor/packaging")
+require("editor/keymap")
 require("editor/telescope")
+require("editor/tree")
+require("editor/theming")
+require("editor/dotenv")
+require("editor/chatgpt")
