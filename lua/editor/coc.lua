@@ -11,6 +11,6 @@ configure(function ()
 end)
 
 function save_method()
-  vim.cmd([[CocCommand prettier.formatFile]])
+  vim.cmd([[Prettier]])
   vim.cmd([[w]])
 end
