@@ -6,3 +6,6 @@ vim.cmd([[colorscheme carbonfox]])
 
 vim.cmd([[hi NvimTreeWinSeparator guifg=#111111 guibg=NONE]])
 
+vim.opt.cursorline = true
+vim.encoding = "utf-8"
+

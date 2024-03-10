@@ -14,10 +14,20 @@ function setup()
   require("editor/git")
   require("editor/line")
   require("editor/terminal")
+  require("editor/pairs")
+  require("editor/tree-sitter")
+  require("editor/projects")
+  require("editor/org")
 end
 
-setup()
-run_config()
+function initialize() 
+  setup()
+  run_config()
 
-require("config/preferences")
-require("config/keys")
+  require("config/preferences")
+  require("config/keys")
+end
+
+initialize()
+
+keys.map_all("<leader>i", "<Esc>:lua initialize()<CR>")
