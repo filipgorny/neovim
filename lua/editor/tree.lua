@@ -69,19 +69,17 @@ tree.close = function()
   is_focused = false
   opened = false
 end
-
-function tree_on_attach(bufnr)
-  local api = require('nvim-tree.api')
-
-  -- OR use all default mappings
-  api.config.mappings.default_on_attach(bufnr)
-
-  -- remove a default
-  vim.keymap.del('n', '<C-k>', { buffer = bufnr })
-
-end
-
 configure(function ()
+  function tree_on_attach(bufnr)
+    local api = require('nvim-tree.api')
+
+    -- OR use all default mappings
+    api.config.mappings.default_on_attach(bufnr)
+
+    -- remove a default
+    vim.keymap.del('n', '<C-k>', { buffer = bufnr })
+  end
+
   require("nvim-tree").setup({
     on_attach = tree_on_attach,
  })
