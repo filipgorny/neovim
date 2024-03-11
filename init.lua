@@ -21,14 +21,13 @@ function setup()
   require("editor/line")
   require("editor/terminal")
   require("editor/projects")
-  require("editor/session")
-  require("editor/emoji")
+  --require("editor/session")
 end
 
 function initialize() 
   setup()
+  packages_sync()
   run_config()
-
 
   require("config/preferences")
   require("config/keys")

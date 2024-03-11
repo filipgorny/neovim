@@ -5,4 +5,4 @@
   "suggest.disableMenu": true,
   "suggest.snippetIndicator": "",
   "coc.formatOnSaveFiletypes": ["javascript", "typescript", "json", "css", "scss", "html", "markdown", "go"],
-}
+
