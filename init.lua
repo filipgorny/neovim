@@ -21,8 +21,8 @@ function setup()
   require("editor/line")
   require("editor/terminal")
   require("editor/projects")
-  require("editor/session")
-  require("editor/emoji")
+  --require("editor/session")
+  --require("editor/emoji")
 end
 
 function initialize() 

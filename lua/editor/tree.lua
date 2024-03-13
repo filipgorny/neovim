@@ -84,6 +84,13 @@ end
 configure(function ()
   require("nvim-tree").setup({
     on_attach = tree_on_attach,
+    git = {
+      enable = true,
+      ignore = false
+    },
+    filters = {
+      dotfiles = false
+    }
  })
 end)
 

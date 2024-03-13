@@ -17,7 +17,7 @@ end
 
 tabs.new_tab = function ()
   tree.close()
-  vim.cmd(":tab")
+  vim.cmd(":tabnew")
   tree.update_previous_window()
   tree.open()
 end
