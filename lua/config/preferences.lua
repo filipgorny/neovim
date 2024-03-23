@@ -11,3 +11,5 @@ vim.opt.cursorline = true
 vim.encoding = "utf-8"
 vim.nobackup = true
 vim.nowritebackup = true
+
+vim.opt.swapfile = false;

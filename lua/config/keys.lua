@@ -3,7 +3,7 @@ local tabs = require("editor.tabs")
 keys.map_modal("we", tabs.new_tab, { desc = "Opens new tab" }) 
 keys.map_all("<C-k>", tabs.prev_tab, { desc = "Goes to previous tab." })
 keys.map_all("<C-j>", tabs.next_tab, { desc = "Goes to next tab." })
-keys.map_all("<S-q>", ":q<CR>", { desc = "Closes the tab." })
+keys.map_modal("<S-q>", ":q<CR>", { desc = "Closes the tab." })
 
 function save_method_end_exit_insert()
   save_method()

@@ -16,10 +16,26 @@ end
 
 bootstrap_pckr()
 
-function install(package)
-	require('pckr').add{
-		package
-	}
+function is_installed(package)
+  return editor.localdb.get(package .. ".installed")
+end
+
+function install(package, opts)
+  if editor.localdb.get(package .. ".installed") then
+    return
+  end
+
+  require('pckr').add{
+    package
+  }
+
+  if opts then
+    if opts.run then
+      require('pckr').run(package, opts.run)
+    end
+  end
+
+  editor.localdb.set(package .. ".installed", "installed")
 end
 
 function install_and_run(package, cmd)

@@ -1,12 +1,21 @@
+editor = {}
+
 function setup()
+  -- libs
+  require("lib/packaging")
+  
+  editor.sysutils = require("lib/sysutils")
+  editor.localdb = require("lib/localdb")
+
+  
   -- Load core packages
   require("editor/config")
-  require("editor/packaging")
   
   -- Load the common functions
   require("utils/components")
 
   -- Load the plugins
+  require("editor/tabs")
   require("editor/keymap")
   require("editor/telescope")
   require("editor/tree")
@@ -22,7 +31,9 @@ function setup()
   require("editor/terminal")
   require("editor/projects")
   require("editor/session")
-  require("editor/emoji")
+  --require("editor/emoji")
+  --
+  require("editor/rest")
 end
 
 function initialize() 
