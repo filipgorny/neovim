@@ -1,0 +1,1 @@
+install("tpope/vim-dadbod")
