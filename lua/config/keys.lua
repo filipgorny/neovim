@@ -22,5 +22,6 @@ keys.map_modal("fl", "<S-$>", { desc = "Goes at the end of the line." })
 keys.map_modal("fh", "<S-^>", { desc = "Goes at the beginning of the line." })
 
 -- navigation
-keys.map_all("<M-e>", "<Esc>:bn<CR>", { desc = "Goes to the previous buffer." })
-keys.map_all("<M-w>", "<Esc>:bp<CR>", { desc = "Goes to the next buffer." })
+local history = require("editor.history")
+keys.map_all("<M-e>", history.jump_forward, { desc = "Goes to the previous buffer." })
+keys.map_all("<M-w>", history.jump_back, { desc = "Goes to the next buffer." })

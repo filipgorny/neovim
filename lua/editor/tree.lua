@@ -3,6 +3,8 @@ install("nvim-tree/nvim-web-devicons")
 
 local tree = {}
 
+local utils = require("nvim-tree.utils")
+
 -- disable netrw at the very start of your init.lua
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
@@ -38,8 +40,7 @@ tree.toggle_tree = function ()
   local api = require("nvim-tree.api")
 
   if opened then
-    if is_focused then
-      is_focused = false
+    if utils.is_nvim_tree_buf() then 
       vim.api.nvim_set_current_win(previous_window)
     else
       previous_window = vim.api.nvim_get_current_win()
@@ -84,6 +85,13 @@ end
 configure(function ()
   require("nvim-tree").setup({
     on_attach = tree_on_attach,
+    git = {
+      enable = true,
+      ignore = false
+    },
+    filters = {
+      dotfiles = false
+    }
  })
 end)
 

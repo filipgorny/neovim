@@ -18,7 +18,5 @@ configure(function ()
     },
   })
 
-  keys.map_all("<leader>ff", "<cmd>Telescope find_files<cr>")
+  keys.map_all("<leader>f", "<cmd>Telescope find_files<cr>")
 end)
-
-keys.map_all("<leader>ff", "<cmd>Telescope find_files<cr>")
