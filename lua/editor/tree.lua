@@ -1,4 +1,13 @@
-install("nvim-tree/nvim-tree.lua")
+install("nvim-tree/nvim-tree.lua", {
+  setup = {
+    highlight_focused_file = true,
+    update_focused_file = {
+      enable = true,
+      update_cwd = true,
+      ignore_list = {}
+    },
+  }
+})
 install("nvim-tree/nvim-web-devicons")
 
 local tree = {}
