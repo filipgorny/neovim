@@ -4,5 +4,24 @@
   "coc.preferences.extensionUpdateCheck": "never",
   "suggest.disableMenu": true,
   "suggest.snippetIndicator": "",
-  "coc.formatOnSaveFiletypes": ["javascript", "typescript", "json", "css", "scss", "html", "markdown", "go"],
+  "coc.formatOnSaveFiletypes": [
+    "javascript",
+    "typescript",
+    "json",
+    "css",
+    "scss",
+    "html",
+    "markdown",
+    "go"
+  ],
+  "pairs.enable": false,
+  "pairs.disableLanguages": [
+    "javascript",
+    "go",
+    "typescript",
+    "html",
+    "json",
+    "lua",
+    "typescriptreact"
+  ]
 }
