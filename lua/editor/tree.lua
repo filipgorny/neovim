@@ -48,6 +48,8 @@ end
 tree.toggle_tree = function ()
   local api = require("nvim-tree.api")
 
+
+  
   if opened then
     if utils.is_nvim_tree_buf() then 
       vim.api.nvim_set_current_win(previous_window)
