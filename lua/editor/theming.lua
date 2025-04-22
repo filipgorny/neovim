@@ -13,6 +13,17 @@ install("navarasu/onedark.nvim")
 
 install("andrew-george/telescope-themes")
 
+install("miikanissi/modus-themes.nvim")
+install("alexmozaidze/palenight.nvim")
+install("scottmckendry/cyberdream.nvim")
+install("ptdewey/darkearth-nvim")
+install("uloco/bluloco.nvim")
+install("slugbyte/lackluster.nvim")
+install("0xstepit/flow.nvim")
+install("Abstract-IDE/Abstract-cs")
+install("tomasiser/vim-code-dark")
+install("bluz71/vim-moonfly-colors")
+
 configure(function ()
   local telescope = require('telescope')
   telescope.load_extension('themes')

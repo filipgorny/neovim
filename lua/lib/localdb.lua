@@ -16,7 +16,7 @@ local config_tbl_desc = {
   value = { "text" },
 }
 
-local db_uri = vim.fn.stdpath("data") .. "/localdb.sqlite3"
+local db_uri = vim.fn.stdpath("data") .. "/nvim.sqlite3"
 
 local sqlitedb = sqlite({
  uri = db_uri

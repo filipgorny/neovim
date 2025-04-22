@@ -25,25 +25,35 @@ function setup()
   require("editor/coc")
   require("editor/fzf")
   --require("editor/notifications")
-  --require("editor/copilot")
-  require("editor/line")
+  require("editor/copilot")
   require("editor/terminal")
   require("editor/projects")
   require("editor/session")
-  --require("editor/emoji")
+  require("editor/line")
   --
   require("editor/rest")
+
+  --require("editor/comment")
+  
+  -- AI
+  require("editor/ai/avante")
+
+  -- organizing
+  require("editor/projects")
+  require("editor/startup")
 end
 
 function initialize()
   setup()
   run_config()
 
-
   require("config/preferences")
   require("config/keys")
+
+  ShowLine()
 end
 
 initialize()
 
 keys.map_all("<leader>i", "<Esc>:lua initialize()<CR>")
+

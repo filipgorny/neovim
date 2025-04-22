@@ -6,6 +6,7 @@ install("nvim-tree/nvim-tree.lua", {
       update_cwd = true,
       ignore_list = {}
     },
+
   }
 })
 install("nvim-tree/nvim-web-devicons")
@@ -48,8 +49,6 @@ end
 tree.toggle_tree = function ()
   local api = require("nvim-tree.api")
 
-
-  
   if opened then
     if utils.is_nvim_tree_buf() then 
       vim.api.nvim_set_current_win(previous_window)
@@ -102,7 +101,10 @@ configure(function ()
     },
     filters = {
       dotfiles = false
-    }
+    },
+    view = {
+      width = 42,
+    },
  })
 end)
 

@@ -15,7 +15,9 @@ local tree = require("editor.tree")
 keys.map_all("<M-q>", tree.toggle_tree, { desc = "Toggles the tree." })
 
 -- saving
-keys.map_all("wq", save_method_end_exit_insert, { desc = "Saves the file and exits insert mode" })
+--keys.map_all("wq", save_method_end_exit_insert, { desc = "Saves the file and exits insert mode" })
+keys.map_all("fd", save_method_end_exit_insert, { desc = "Save file and exit insert mode" })
+
 
 -- typing navigation
 keys.map_modal("fl", "<S-$>", { desc = "Goes at the end of the line." })

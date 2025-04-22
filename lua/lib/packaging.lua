@@ -26,11 +26,36 @@ function is_installed(package)
   return editor.localdb.get(package .. ".installed") 
 end
 
-function install(package, opts)
+
+function install(package, opts, config)
   if editor.localdb.get(package .. ".installed") then
     return
   end
 
+  require('pckr').add{
+    package,
+  }
+
+  if opts then
+    if opts.run then
+      require('pckr').run(package, opts.run)
+    end
+
+    if opts.setup then
+      setup[package] = opts.setup
+    end
+  end
+  
+  editor.localdb.set(package .. ".installed", "installed")
+end
+
+function install_and_run(package, cmd)
+  require('pckr').add{
+    { package, run = cmd }
+  }
+end
+
+function force_install(package, opts) 
   require('pckr').add{
     package
   }
@@ -48,9 +73,4 @@ function install(package, opts)
   editor.localdb.set(package .. ".installed", "installed")
 end
 
-function install_and_run(package, cmd)
-  require('pckr').add{
-    { package, run = cmd }
-  }
-end
 

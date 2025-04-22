@@ -15,3 +15,6 @@ vim.nowritebackup = true
 vim.opt.swapfile = false;
 
 vim.wo.number = true;
+
+vim.opt.number = true
+vim.opt.relativenumber = true
