@@ -40,7 +40,10 @@ function setup()
 
   -- organizing
   require("editor/projects")
-  require("editor/startup")
+  --require("editor/startup")
+
+  -- debug
+  require("editor/debug")
 end
 
 function initialize()
