@@ -1,0 +1,10 @@
+import { ExamScoreDiagram } from '../exam-score-diagram'
+
+const begScore = 472
+const endScore = 528
+const scoreData = [1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 8, 9, 10, 11, 12, 12, 13, 14, 15, 16, 16, 16, 14, 13, 12, 11, 10, 9, 8, 7, 6, 6, 5, 5, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2]
+
+export default async () => {
+  const diagram = new ExamScoreDiagram(begScore, endScore, scoreData)
+  return diagram.getDataForGraphs()
+}

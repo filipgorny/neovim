@@ -1,0 +1,7 @@
+export const CREATING = 'creating'
+export const CREATED = 'created'
+export const FETCHED = 'fetched'
+export const FETCHED_COLLECTION = 'fetched=collection'
+export const SAVED = 'saved'
+export const UPDATED = 'updated'
+export const DESTROYING = 'destroying'

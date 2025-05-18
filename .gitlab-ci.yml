@@ -1,0 +1,90 @@
+variables:
+  RANCHER_URL: https://rancher.desmart.com
+  RANCHER_ENVIRONMENT: staging
+  RANCHER_STACK_NAME: $CI_ENV-$CI_PROJECT_PATH_SLUG
+  RANCHER_CONFIG_DIR: gitlab/deploy/staging
+  DEPLOY_SCRIPT: $RANCHER_CONFIG_DIR/ci-deploy.sh
+  WEB_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+  HOSTNAME: $CI_PROJECT_PATH_SLUG.$CI_ENV.desmart.live
+  HOSTNAME_PRODUCTION: kracku-api.examkrackers.com
+
+cache:
+  key: $CI_COMMIT_REF_NAME
+  untracked: false
+  paths:
+    - .yarn/cache
+    - .yarn/install-state.gz
+    - node_modules/
+
+stages:
+  - build
+  - deploy
+
+.stage.build: &STAGE_BUILD
+  environment: $CI_ENV
+  stage: build
+
+.stage.deploy: &STAGE_DEPLOY
+  environment: $CI_ENV
+  stage: deploy
+  image: desmart/rancher-deploy
+  cache: {}
+
+.env.test: &ENV_TEST
+  variables:
+    CI_ENV: test
+  only:
+    - develop
+
+.env.beta: &ENV_BETA
+  variables:
+    CI_ENV: beta
+    CI_COMMIT_REF_NAME: beta
+  only:
+    - /^release/
+
+.env.production: &ENV_PRODUCTION
+  variables:
+    CI_ENV: production
+    RANCHER_CONFIG_DIR: gitlab/deploy/production
+    HOSTNAME: $HOSTNAME_PRODUCTION
+    DEPLOY_SCRIPT: $RANCHER_CONFIG_DIR/ci-deploy.sh
+  only:
+    - master
+
+.script.build: &SCRIPT_BUILD
+  artifacts:
+    paths:
+      - dekick-build.log
+      - .env
+    expire_in: 15 minutes
+    when: always
+  script:
+    - source dekick/dev
+    - dekick credentials get --token="$VAULT_TOKEN" --env="$CI_ENV"
+    - dekick build --ci --target-image="$WEB_IMAGE" --push --docker-login-user="gitlab-ci-token" --docker-login-password="$CI_JOB_TOKEN" --docker-registry="$CI_REGISTRY"
+  interruptible: true
+
+.script.deploy: &SCRIPT_DEPLOY
+  script:
+    - source envfileparse .env
+    - ./$DEPLOY_SCRIPT
+  interruptible: false
+
+test:build image:
+  <<: [*ENV_TEST, *STAGE_BUILD, *SCRIPT_BUILD]
+
+beta:build image:
+  <<: [*ENV_BETA, *STAGE_BUILD, *SCRIPT_BUILD]
+
+production:build image:
+  <<: [*ENV_PRODUCTION, *STAGE_BUILD, *SCRIPT_BUILD]
+
+test:deploy:
+  <<: [*ENV_TEST, *STAGE_DEPLOY, *SCRIPT_DEPLOY]
+
+beta:deploy:
+  <<: [*ENV_BETA, *STAGE_DEPLOY, *SCRIPT_DEPLOY]
+
+production:deploy:
+  <<: [*ENV_PRODUCTION, *STAGE_DEPLOY, *SCRIPT_DEPLOY]

@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "ek-scripts"
+version = "0.1.0"
+description = "Scripts to make life easier"
+authors = [
+    "Daria Wieliczko <daria@desmart.com>",
+    "Kamil Fojuth <fen@desmart.com>"
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+python-decouple = "^3.4"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]

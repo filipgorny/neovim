@@ -1,0 +1,30 @@
+.idea
+node_modules
+db
+dist
+envs
+# dotenv environment variable files
+.env*
+dekick*.log
+testing.ts
+.DS_Store
+# yarn
+
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+yarn-error.log*
+.yarn-integrity
+yarn-debug.log*
+
+public.sql# DeKick environments
+envs/
+envs/*
+.env
+
+# vscode settings
+.vscode/

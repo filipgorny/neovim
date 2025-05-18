@@ -1,0 +1,6 @@
+export const STUDENT_EXAM_STATUS_SCHEDULED = 'scheduled'
+export const STUDENT_EXAM_STATUS_COMPLETED = 'completed'
+export const STUDENT_EXAM_STATUS_PAUSED = 'paused'
+export const STUDENT_EXAM_STATUS_EXPIRED = 'expired'
+export const STUDENT_EXAM_STATUS_IN_PROGRESS = 'in_progress'
+export const STUDENT_EXAM_STATUS_ARCHIVED = 'archived'

@@ -1,0 +1,2 @@
+export const QUESTION_TIME_SHORT = 96.605
+export const QUESTION_TIME_LONG = 101.887

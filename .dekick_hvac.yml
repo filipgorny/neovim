@@ -1,0 +1,9 @@
+environments:
+- name: local
+  id: 1a524527d0c85d524dfc9901c081568e0aae6107d416241701d50c5070358cfd
+- name: test
+  id: 0ad1844627e06f259832ac722ee59ad4b541418c1e78eaa83ed68114d58363db
+- name: beta
+  id: eeebf486b1f036aa39d39e85e4265717ed2fda814fe3148da6e43b8ae6cd90f2
+- name: production
+  id: 1bb6734b464f8be6ed593f9b064fbb98425864128d7a3429a4ae7ce75619ec2e

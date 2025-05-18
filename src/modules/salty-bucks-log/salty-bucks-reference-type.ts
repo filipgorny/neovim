@@ -1,0 +1,17 @@
+export enum SaltyBucksReferenceType {
+  admin = 'admin',
+  student = 'student',
+  resource = 'resource',
+  siteActivity = 'site_activity',
+  book = 'book',
+  exam = 'exam',
+  chapter = 'chapter',
+  course = 'book_course',
+  flashcard = 'flashcard',
+  contentQuestion = 'content_question',
+  aminoAcidGame = 'amino_acid_game',
+  gladiatorsGame = 'gladiators_game',
+  respirationGame = 'respiration_game',
+  hangmanGame = 'hangman_game',
+  aiTutor = 'ai_tutor',
+}

@@ -1,0 +1,60 @@
+services:
+  web:
+    image: desmart/node:16.15-4-alpine3.16
+    user: $CURRENT_UID
+    environment:
+      - NODE_ENV=${APP_ENV}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=$COMPOSE_PROJECT_NAME
+      - DB_USER=$COMPOSE_PROJECT_NAME
+      - DB_PASSWORD=$COMPOSE_PROJECT_NAME
+      - HOME=/tmp
+    command:
+      [
+        "nodemon",
+        "-x",
+        "node_modules/.bin/ts-node --transpile-only --files -r tsconfig-paths/register",
+        "-w",
+        "src/",
+        "-w",
+        "services/",
+        "-w",
+        "utils/",
+        "-w",
+        "integrations/",
+        "src/server.ts",
+      ]
+    ports:
+      - ${DOCKER_PORT_API}:3000
+      - ${DOCKER_PORT_API_DEBUGGER}:9229
+    working_dir: /usr/src/app
+    volumes:
+      - ${PROJECT_ROOT}:/usr/src/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:12.7
+    ports:
+      - ${DOCKER_PORT_DB}:5432
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=$COMPOSE_PROJECT_NAME
+      - POSTGRES_USER=$COMPOSE_PROJECT_NAME
+      - POSTGRES_ROOT_PASSWORD=root
+      - POSTGRES_PASSWORD=$COMPOSE_PROJECT_NAME
+      - POSTGRES_HOST_AUTH_METHOD=trust
+      - POSTGRES_INITDB_ARGS="-E UTF-8"
+      - PGUSER=$COMPOSE_PROJECT_NAME
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 1s
+      timeout: 60s
+      retries: 90
+      start_period: 15s
+
+volumes:
+  db-data:

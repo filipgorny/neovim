@@ -1,0 +1,6 @@
+{
+  "defaultExamAccessPeriod": 14,
+  "examAmountThreshold": 6,
+  "minimumExamsTakenForShowingScores": 20,
+  "saltyBucksStartingBalance": 500
+}

@@ -1,0 +1,16 @@
+export type ClassDay = {
+  id: string,
+  book_chapter_id: string,
+  exam_id: string,
+  class_date: string,
+  class_time: string,
+  class_time_end: string,
+  class_topic: string,
+  class_topic_number: string,
+  end_date_id: string,
+  meeting_url: string,
+  custom_title?: string,
+  fill_colour_start?: string,
+  fill_colour_stop?: string,
+  font_colour?: string,
+}

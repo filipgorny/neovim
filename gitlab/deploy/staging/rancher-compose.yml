@@ -1,0 +1,86 @@
+version: "2"
+services:
+  lb:
+    scale: 1
+    start_on_create: true
+    lb_config:
+      port_rules:
+        - hostname: $HOSTNAME
+          path: ""
+          priority: 1
+          protocol: http
+          source_port: 80
+          target_port: 80
+          selector: web.container.target=$CI_PROJECT_PATH_SLUG.$CI_ENV
+    health_check:
+      port: 42
+      interval: 2000
+      unhealthy_threshold: 2
+      healthy_threshold: 2
+      response_timeout: 2000
+  web:
+    scale: 2
+    start_on_create: false
+    upgrade_strategy:
+      start_first: true
+    drain_timeout_ms: 5000
+  # cron-calculate-oil-level:
+  #   scale: 1
+  #   start_on_create: true
+  cron-calculate-percentile-rank:
+    scale: 1
+    start_on_create: true
+  cron-calculate-percentile-ranks:
+    scale: 1
+    start_on_create: true
+  cron-calculate-student-exam-scores:
+    scale: 1
+    start_on_create: true
+  # cron-calculate-temperature:
+  #   scale: 1
+  #   start_on_create: true
+  cron-copy-unlocked-books:
+    scale: 1
+    start_on_create: true
+  cron-delete-first-softly-removed-student-course:
+    scale: 1
+    start_on_create: true
+  cron-delete-some-old-books-completely:
+    scale: 1
+    start_on_create: true
+  cron-dispatch-course-expiration-three-days:
+    scale: 1
+    start_on_create: true
+  cron-dispatch-exam-expiration-two-days:
+    scale: 1
+    start_on_create: true
+  cron-dispatch-exam-expire-today:
+    scale: 1
+    start_on_create: true
+  cron-evaluate-score-calculations-enabled:
+    scale: 1
+    start_on_create: true
+  cron-log-daily-salty-bucks-balance:
+    scale: 1
+    start_on_create: true
+  cron-remove-old-notifications:
+    scale: 1
+    start_on_create: true
+  cron-remove-old-student-notifications:
+    scale: 1
+    start_on_create: true
+  cron-remove-outdated-exams:
+    scale: 1
+    start_on_create: true
+  cron-send-out-notifications:
+    scale: 1
+    start_on_create: true
+  cron-update-expired-student-courses:
+    scale: 1
+    start_on_create: true
+  cron-reschedule-incomplete-events:
+    scale: 1
+    start_on_create: true
+  cron-remove-outdated-accounts:
+    scale: 1
+    start_on_create: true

@@ -1,0 +1,5 @@
+import { find } from '../MODULE_NAME-repository'
+
+export default async (query) => (
+  find(query)
+)

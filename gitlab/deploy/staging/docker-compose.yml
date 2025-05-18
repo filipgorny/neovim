@@ -1,0 +1,211 @@
+version: "2"
+services:
+  lb:
+    image: rancher/lb-service-haproxy:v0.9.14
+    cpu_shares: 1024
+    expose:
+      - 80:80/tcp
+    labels:
+      io.rancher.container.agent.role: environmentAdmin
+      io.rancher.container.agent_service.drain_provider: "true"
+      io.rancher.container.create_agent: "true"
+      io.rancher.lb_service.target: any
+      web.http: "true"
+  web: &WEB_SERVICE
+    image: $WEB_IMAGE
+    cpu_shares: 1024
+    stdin_open: true
+    tty: true
+    labels:
+      io.rancher.container.pull_image: always
+      web.container.target: $CI_PROJECT_PATH_SLUG.$CI_ENV
+      io.rancher.scheduler.affinity:container_label_soft_ne: io.rancher.stack_service.name=$${stack_name}/$${service_name}
+    command: ["dist/src/server.js"]
+    environment:
+      - NGINX_GRAYLOG_HOST=graylog.desmart.com
+      - NGINX_GRAYLOG_PORT=26001
+      - CI_ENV=$CI_ENV
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG
+    volumes:
+      - /data/nfs/volumes/examkrackers/api/storage:/usr/src/app/storage
+  cron-calculate-oil-level:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/calculate-oil-level.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-calculate-oil-level
+  cron-calculate-percentile-rank:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/calculate-percentile-rank.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-calculate-percentile-rank
+  cron-calculate-percentile-ranks:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/calculate-percentile-ranks.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-calculate-percentile-ranks
+  cron-calculate-student-exam-scores:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/calculate-student-exam-scores.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-calculate-student-exam-scores
+  cron-calculate-temperature:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/calculate-temperature.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-calculate-temperature
+  cron-copy-unlocked-books:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/copy-unlocked-books.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-copy-unlocked-books
+  cron-delete-first-softly-removed-student-course:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command:
+      ["node", "dist/src/cron/delete-first-softly-removed-student-course.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-delete-first-softly-removed-student-course
+  cron-delete-some-old-books-completely:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/delete-some-old-books-completely.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-delete-some-old-books-completely
+  cron-dispatch-course-expiration-three-days:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/dispatch-course-expiration-three-days.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-dispatch-course-expiration-three-days
+  cron-dispatch-exam-expiration-two-days:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/dispatch-exam-expiration-two-days.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-dispatch-exam-expiration-two-days
+  cron-dispatch-exam-expire-today:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/dispatch-exam-expire-today.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-dispatch-exam-expire-today
+  cron-evaluate-score-calculations-enabled:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/evaluate-score-calculations-enabled.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-evaluate-score-calculations-enabled
+  cron-log-daily-salty-bucks-balance:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/log-daily-salty-bucks-balance.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-log-daily-salty-bucks-balance
+  cron-remove-old-notifications:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/remove-old-notifications.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-remove-old-notifications
+  cron-remove-old-student-notifications:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/remove-old-student-notifications.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-remove-old-student-notifications
+  cron-remove-outdated-exams:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/remove-outdated-exams.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-remove-outdated-exams
+  cron-send-out-notifications:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/send-out-notifications.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-send-out-notifications
+  cron-update-expired-student-courses:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/update-expired-student-courses.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-update-expired-student-courses
+  cron-reschedule-incomplete-events:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/reschedule-incomplete-events.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-reschedule-incomplete-events
+  cron-remove-outdated-accounts:
+    <<: *WEB_SERVICE
+    cpu_shares: 768
+    labels:
+      web.container.target: none
+      host.type: cron
+    command: ["node", "dist/src/cron/remove-outdated-accounts.js"]
+    environment:
+      - CI_PROJECT_SLUG=$CI_PROJECT_PATH_SLUG-cron-remove-outdated-accounts

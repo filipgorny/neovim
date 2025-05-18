@@ -1,0 +1,28 @@
+dekick:
+  boilerplate: express/default
+  flavour: express
+  ports:
+    - port: 8081
+      service: api
+    - port: 5432
+      service: db
+    - port: 9229
+      service: api-debugger
+gitlab:
+  url: https://git.desmart.com/
+hashicorp_vault:
+  url: https://vault.desmart.com/
+project:
+  artifacts:
+    - path: .yarn/cache
+    - path: .yarn/install-state.gz
+    - path: node_modules/
+  environments:
+    - name: test
+    - name: beta
+    - name: production
+  group: examkrackers
+  name: api
+  providers:
+    credentials:
+      driver: hashicorp_vault

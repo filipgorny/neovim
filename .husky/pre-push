@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# shellcheck source=/dev/null
+# source "dekick/dev"
+
+# # . "$(dirname "$0")/_/husky.sh"
+
+# if [[ "$OSTYPE" == 'darwin'* ]]; then
+#   user="--user=root"
+# else
+#   user="--user=$(id -u):$(id -g)"
+# fi
+
+# set -e
+
+# dc run -T --rm -e CI=true "$user" api yarn test

@@ -1,0 +1,6 @@
+module.exports = {
+  ROUTE_IMPORT_BREAKPOINT: '[CREATE-MODULE:route-import]',
+  ROUTE_BIND_BREAKPOINT: '[CREATE-MODULE:route-bind]',
+  MODEL_IMPORT_BREAKPOINT: '[CREATE-MODULE:model-import]',
+  MODEL_EXPORT_BREAKPOINT: '[CREATE-MODULE:model-export]'
+}

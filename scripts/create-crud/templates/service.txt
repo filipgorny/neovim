@@ -1,0 +1,13 @@
+import { create, patch, remove } from './MODULE_NAME-repository'
+
+export const createEntity = async (dto: {}) => (
+  create(dto)
+)
+
+export const patchEntity = async (id: string, dto: {}) => (
+  patch(id, dto)
+)
+
+export const deleteEntity = async (id: string) => (
+  remove(id)
+)

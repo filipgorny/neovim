@@ -1,0 +1,8 @@
+export const EXAM_LOG_CREATED = 'created'
+export const EXAM_LOG_EXTERNAL_ID_UPDATED = 'external_id_updated'
+export const EXAM_LOG_ACCESS_PERIOD_UPDATED = 'access_period_updated'
+export const EXAM_LOG_TITLE_UPDATED = 'title_updated'
+export const EXAM_LOG_DELETED = 'deleted'
+export const EXAM_LOG_REUPLOADED = 'reuploaded'
+export const EXAM_LOG_SCALED_SCORES_UPDATED = 'scaled_scores_updated'
+export const EXAM_LOG_SCORE_CALCULATION_METHOD_CHANGED = 'score_calculation_method_changed'

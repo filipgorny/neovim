@@ -1,0 +1,6 @@
+export const GETTING_STARTED_LINK = 'getting_started_link'
+export const TRAINING_TUTORIALS_LINK = 'training_tutorials_link'
+export const SHARE_WITH_COMMUNITY_LINK = 'share_with_community_link'
+export const STATUS_PAGE_LINK = 'status_page_link'
+export const HELP_CENTER_LINK = 'help_center_link'
+export const CONTACT_US_LINK = 'contact_us_link'

@@ -1,0 +1,165 @@
+{
+  "name": "examkrackers-api",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "main": "dist/server.js",
+  "dependencies": {
+    "@desmart/js-utils": "https://git.desmart.com/desmart/modules/js/utils.git",
+    "@log4js-node/gelf": "^1.0.2",
+    "@sendgrid/mail": "^7.4.4",
+    "@sentry/node": "^7.29.0",
+    "@sentry/tracing": "^7.29.0",
+    "@types/axios": "^0.14.0",
+    "@types/bookshelf": "^1.2.1",
+    "@types/cors": "^2.8.10",
+    "@types/eslint": "^7.2.13",
+    "@types/express": "^4.17.12",
+    "@types/express-fileupload": "^1.1.6",
+    "@types/jest": "^26.0.23",
+    "@types/method-override": "^0.0.31",
+    "@types/mime-types": "^2.1.0",
+    "@types/node": "^15.12.2",
+    "@types/socket.io": "^3.0.2",
+    "@typescript-eslint/eslint-plugin": "^4.26.1",
+    "@typescript-eslint/parser": "^4.26.1",
+    "aws-sdk": "^2.938.0",
+    "axios": "^0.24.0",
+    "bcryptjs": "^2.4.3",
+    "bookshelf": "^1.2.0",
+    "bookshelf-eloquent": "^0.1.15",
+    "bookshelf-uuid": "^1.0.1",
+    "cors": "^2.8.5",
+    "cronstrue": "^2.41.0",
+    "date-holidays": "^3.23.3",
+    "dotenv": "10.0.0",
+    "express": "^4.17.1",
+    "express-fileupload": "^1.2.1",
+    "express-promise-wrap": "^0.2.2",
+    "html-entities": "^2.3.3",
+    "jest": "^27.0.4",
+    "joi": "^17.4.0",
+    "jsonwebtoken": "^8.5.1",
+    "knex": "^0.95.6",
+    "lodash.camelcase": "^4.3.0",
+    "lodash.snakecase": "^4.1.1",
+    "log4js": "^6.7.1",
+    "method-override": "^3.0.0",
+    "mime-types": "2.1.31",
+    "moment": "^2.29.1",
+    "moment-timezone": "^0.5.43",
+    "nock": "^13.2.1",
+    "node-cron": "^3.0.0",
+    "openai": "^4.28.0",
+    "ordinal": "^1.0.3",
+    "papaparse": "^5.3.1",
+    "pg": "8.6.0",
+    "plivo": "^4.37.0",
+    "pluralize": "^8.0.0",
+    "prompts": "^2.4.1",
+    "ramda": "^0.27.1",
+    "sha1": "^1.1.1",
+    "socket.io-client": "4.6.2",
+    "ts-jest": "^27.0.3",
+    "ts-node": "^10.0.0",
+    "ts-standard": "^10.0.0",
+    "typescript": "^4.3.2",
+    "uuid": "^8.3.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.19.2/xlsx-0.19.2.tgz",
+    "xregexp": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/uuid": "^8.3.3",
+    "eslint": "7",
+    "eslint-config-standard": "^16.0.3",
+    "eslint-config-standard-with-typescript": "^20.0.0",
+    "eslint-plugin-import": "2",
+    "eslint-plugin-node": "11",
+    "eslint-plugin-promise": "^5.1.0",
+    "husky": "^6.0.0",
+    "npm-check-updates": "^11.6.0",
+    "snazzy": "^9.0.0"
+  },
+  "scripts": {
+    "build": "rm -rf ./dist/* ./dist/.* 2>/dev/null; tsc --project ./",
+    "lint": "echo true",
+    "default-lint": "ts-standard --verbose | snazzy",
+    "posttest": "npm run lint",
+    "test": "rm -rf ./dist/* ./dist/.* 2>/dev/null; tsc --project ./ && rm -rf ./dist/* ./dist/.* 2>/dev/null; NODE_ENV=unit_test_env jest --forceExit --maxWorkers=50%",
+    "test-fast": "NODE_ENV=unit_test_env jest --forceExit --maxWorkers=50%",
+    "coverage": "jest --coverage",
+    "api": "docker exec -it api_api_1",
+    "migrate:make": "node_modules/.bin/knex migrate:make",
+    "create:module": "node scripts/create-module/create-module.js",
+    "create:action": "node scripts/create-action/create-action.js",
+    "create:crud": "node scripts/create-crud/create-crud.js",
+    "ek:update-user-roles": "node dist/scripts/users/transform-user-roles.js",
+    "ek:create:master-admin": "node dist/scripts/create-master-admin/create-master-admin.js",
+    "ek:create:layout": "node dist/scripts/create-layout/create-layout.js",
+    "ek:create:default-exam-type": "node dist/scripts/create-default-exam-type/create-default-exam-type.js",
+    "ek:create:app-setting": "node dist/scripts/create-app-setting/create-app-setting.js",
+    "ek:create:initial-app-settings": "node dist/scripts/create-app-setting/create-initial-app-settings.js",
+    "ek:drop-student-exams": "node dist/scripts/drop-student-exams/drop-student-exams.js",
+    "ek:seed-timers": "node dist/scripts/exam-metrics/seed-timers.js",
+    "ek:cron-debug": "node dist/scripts/cron-debug/launch-job.js",
+    "ek:percentile-rank": "node dist/scripts/percentile-rank/calculate-percentile-rank.js",
+    "ek:calculate-student-exam-scores": "node dist/scripts/student-scores/calculate-student-exam-scores.js",
+    "ek:count-words-in-passages": "node dist/scripts/exam-passages/count-words-in-passages.js",
+    "ek:completion-meter:oil": "node dist/scripts/completion-meter/calculate-oil-level.js",
+    "ek:completion-meter:legacy": "node dist/scripts/completion-meter/create-legacy-completion-meters.js",
+    "prepack": "husky install"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverage": false,
+    "collectCoverageFrom": [
+      "server/models/**/*.js",
+      "services/**/*.js",
+      "utils/**/*.js"
+    ],
+    "coverageReporters": [
+      "json",
+      "html"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.+(ts|js)",
+      "**/?(*.)+(spec|test).+(ts|js)"
+    ],
+    "transform": {
+      "^.+\\.(ts)$": "ts-jest"
+    },
+    "testPathIgnorePatterns": [
+      "/dist",
+      "__tests__/create-full-mcat-exam-type.help.ts",
+      "__tests__/create-full-mcat-exam.help.ts"
+    ],
+    "moduleNameMapper": {
+      "astronomia/data(.*)$": "<rootDir>/node_modules/astronomia/lib/data$1.cjs"
+    }
+  },
+  "standard": {
+    "globals": [
+      "__basedir"
+    ],
+    "env": [
+      "jest"
+    ],
+    "ignore": [
+      "storage/"
+    ]
+  },
+  "ts-standard": {
+    "ignore": [
+      "src/**/*.js",
+      "services/**/*.js",
+      "utils/**/*.js",
+      "db",
+      "dist",
+      "storage",
+      "scripts",
+      "gitlab",
+      "docker",
+      "migrations"
+    ]
+  },
+  "packageManager": "yarn@3.2.2"
+}

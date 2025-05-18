@@ -1,0 +1,43 @@
+import { StudentCourseStatus } from '../modules/student-courses/student-course-status'
+import { StudentCourseTypes } from '../modules/student-courses/student-course-types'
+
+export type StudentCourse = {
+  id: string,
+  student_id: string,
+  book_course_id: string,
+  external_created_at: string,
+  title: string,
+  subtitle: string,
+  type: StudentCourseTypes,
+  status: StudentCourseStatus,
+  accessible_from?: string,
+  accessible_to?: string,
+  is_ready?: boolean,
+  completed_at?: string,
+  metadata?: any,
+  expected_end_date?: string,
+  is_paused?: boolean,
+  flashcard_count?: number,
+  flashcard_snapshot?: string,
+  book_order?: string,
+  course_topics_title?: string,
+  original_end_date?: string,
+  original_metadata?: any,
+  is_deleted?: boolean,
+  calendar_start_at?: string,
+  mcat_date_id?: string,
+  exam_at?: string,
+  end_date_id?: string,
+  days_off_ignored?: boolean,
+  prioridays?: string,
+  videos_migrated?: boolean,
+  current_study_streak?: number,
+  longest_study_streak?: number,
+  site_activity?: string,
+  pre_reading_end_date?: string,
+  is_pre_reading?: boolean,
+  accessed_at?: string,
+  extension_calendar_modal_closed?: boolean,
+}
+
+export type StudentCourseDTO = Omit<StudentCourse, 'id'>

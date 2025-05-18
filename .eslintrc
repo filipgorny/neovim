@@ -1,0 +1,36 @@
+{
+  "extends": "standard-with-typescript",
+  "parserOptions": {
+    "project": "./tsconfig.json"
+  },
+  "parser": "@typescript-eslint/parser",
+  "plugins": [
+    "@typescript-eslint",
+    "@typescript-eslint/eslint-plugin"
+  ],
+  "rules": {
+    "@typescript-eslint/naming-convention": 0,
+    "@typescript-eslint/return-await": 0,
+    "@typescript-eslint/strict-boolean-expressions": 0,
+    "@typescript-eslint/explicit-function-return-type": 1,
+    "@typescript-eslint/restrict-template-expressions": 1,
+    "@typescript-eslint/prefer-ts-expect-error": 0,
+    "@typescript-eslint/consistent-type-definitions": 0,
+    "@typescript-eslint/member-delimiter-style": 0,
+    "@typescript-eslint/no-unused-vars": 1,
+    "@typescript-eslint/restrict-plus-operands": 1,
+    "@typescript-eslint/array-type": 1,
+    "@typescript-eslint/no-floating-promises": 0,
+    "import/first": 0,
+    "comma-dangle": [
+      "error",
+      {
+        "arrays": "always-multiline",
+        "objects": "always-multiline",
+        "imports": "never",
+        "exports": "never",
+        "functions": "never"
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+const tableName = 'course_tutors'
+const columnNameA = 'deleted_at'
+
+exports.up = async knex => up(knex)
+exports.down = async knex => down(knex)
+
+
+const up = async knex => (
+  knex.schema.table(tableName, table => {
+    table.timestamp(columnNameA).nullable()
+  })
+)
+
+const down = async knex => (
+  knex.schema.table(tableName, table => {
+    table.dropColumn(columnNameA)
+  })
+)
