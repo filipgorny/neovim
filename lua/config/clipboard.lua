@@ -1,0 +1,3 @@
+local clipboard = {
+  name = "unnamedplus"
+}

@@ -16,5 +16,6 @@ return {
             ensure_installed = { 'typescript', 'javascript', 'tsx' },
              highlight = { enable = true },
         })
-    end
+end,
+	opts = { ensure_installed = { "go", "gomod", "gowork", "gosum" } }
  }
