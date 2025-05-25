@@ -52,12 +52,13 @@ export const dispatchVerificationCodeAsStudent = async ({ student_phone, student
       console.log('Error sending 2FA code', error)
     }
   } else {
-    logger.info('2FA: sending code via SMS to', payload.to)
+    // logger.info('2FA: sending code via SMS to', payload.to)
 
-    const phloClient = new plivo.PhloClient(env('PLIVO_AUTH_ID'), env('PLIVO_AUTH_TOKEN'), {})
-    const result = await phloClient.phlo(env('PLIVO_PHLO_ID')).run(payload)
+    // const phloClient = new plivo.PhloClient(env('PLIVO_AUTH_ID'), env('PLIVO_AUTH_TOKEN'), {})
+    // const result = await phloClient.phlo(env('PLIVO_PHLO_ID')).run(payload)
 
-    console.log('Phlo run result', result)
+    // console.log('Phlo run result', result)
+    await setVerificationCode(student.id, code)
   }
 
   await setVerificationCode(student.id, code)
