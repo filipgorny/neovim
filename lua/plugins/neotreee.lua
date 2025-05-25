@@ -44,6 +44,7 @@ return {
     -----@type neotree.Config
     --opts = {},
     config = function()
+
       -- If you want icons for diagnostic errors, you'll need to define them somewhere.
       -- In Neovim v0.10+, you can configure them in vim.diagnostic.config(), like:
       --
@@ -72,9 +73,6 @@ return {
         popup_border_style = "NC", -- or "" to use 'winborder' on Neovim v0.11+
         enable_git_status = true,
         enable_diagnostics = true,
-	window = {
-		position = float,
-	},
         open_files_do_not_replace_types = { "terminal", "trouble", "qf" }, -- when opening files, do not use windows containing these filetypes or buftypes
         open_files_using_relative_paths = false,
         sort_case_insensitive = false, -- used when sorting files and directories in the tree
@@ -186,8 +184,7 @@ return {
           },
           mappings = {
             ["<space>"] = {
-              "toggle_node",
-              nowait = false, -- disable `nowait` if you have existing combos starting with this char that you want to use
+              "toggle_node", nowait = false, -- disable `nowait` if you have existing combos starting with this char that you want to use { 
             },
             ["<2-LeftMouse>"] = "open",
             ["<cr>"] = "open",
