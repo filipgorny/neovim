@@ -1,3 +1,1 @@
-local clipboard = {
-  name = "unnamedplus"
-}
+vim.api.nvim_set_option("clipboard", "unnamed")
