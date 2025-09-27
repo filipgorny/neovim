@@ -1,6 +1,5 @@
 -- file: lua/plugins/lsp-config.lua
 return {
-  -- Mason package manager
   {
     "williamboman/mason.nvim",
     cmd = "Mason",
@@ -9,46 +8,26 @@ return {
     end,
   },
 
-  -- Mason LSP bridge
   {
     "williamboman/mason-lspconfig.nvim",
     dependencies = { "mason.nvim" },
     config = function()
-      local mason_lsp = require("mason-lspconfig")
-      mason_lsp.setup({
-        ensure_installed = {
-          "ts_ls",      -- TypeScript Language Server
-          "gopls",
-          "cssls",
-          "html",
-          "pyright",
-          "bashls",
-          "clangd",
-        },
+      require("mason-lspconfig").setup({
+        ensure_installed = { "ts_ls", "eslint", "gopls" },
         automatic_installation = true,
       })
     end,
   },
 
-  -- LSP config
   {
     "neovim/nvim-lspconfig",
-    dependencies = {
-      "hrsh7th/cmp-nvim-lsp",
-      "nvim-treesitter/nvim-treesitter",
-      "williamboman/mason.nvim",
-      "williamboman/mason-lspconfig.nvim",
-    },
+    dependencies = { "hrsh7th/cmp-nvim-lsp", "nvim-treesitter/nvim-treesitter" },
     event = { "BufReadPre", "BufNewFile" },
     config = function()
       local cmp_capabilities = require("cmp_nvim_lsp").default_capabilities()
 
-      -- Highlight dla wirtualnych diagnostics
-      vim.cmd([[highlight VirtualDiagnostic guifg=#dcdcaa]])
-
       local function on_attach(client, bufnr)
         local opts = { noremap = true, silent = true, buffer = bufnr }
-
         vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
         vim.keymap.set("n", "gD", vim.lsp.buf.declaration, opts)
         vim.keymap.set("n", "gi", vim.lsp.buf.implementation, opts)
@@ -60,56 +39,34 @@ return {
         vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, opts)
         vim.keymap.set("n", "]d", vim.diagnostic.goto_next, opts)
         vim.keymap.set("i", "<C-h>", vim.lsp.buf.signature_help, opts)
-
-        -- Auto-import / organize imports dla TypeScript
-        if client.name == "ts_ls" then
-          vim.api.nvim_create_autocmd("BufWritePre", {
-            buffer = bufnr,
-            callback = function()
-              vim.lsp.buf.execute_command({
-                command = "_typescript.applyWorkspaceEdit",
-                arguments = {},
-              })
-            end,
-          })
-        end
-
-        -- Semantic highlighting
-        if client.server_capabilities.semanticTokensProvider then
-          vim.lsp.semantic_tokens.on_attach(client, bufnr)
-        end
-
-        -- Inline type hints
-        if client.supports_method("textDocument/inlayHint") then
-          vim.lsp.buf.inlay_hint(bufnr, true)
-        end
       end
 
-      -- Lista serwerów
-      local servers = { "ts_ls", "gopls", "cssls", "html", "pyright", "bashls", "clangd" }
+      -- Konfiguracja serwera TypeScript
+      vim.lsp.config("ts_ls", {
+        cmd = { "typescript-language-server", "--stdio" },
+        filetypes = { "typescript", "typescriptreact", "typescript.tsx" },
+        capabilities = cmp_capabilities,
+        on_attach = on_attach,
+      })
+      vim.lsp.enable("ts_ls")
 
-      for _, server_name in ipairs(servers) do
-        vim.lsp.config(server_name, {
-          on_attach = on_attach,
-          capabilities = cmp_capabilities,
-          settings = server_name == "gopls" and {
-            gopls = {
-              analyses = { unusedparams = true, shadow = true },
-              staticcheck = true,
-            }
-          } or nil,
-        })
-        vim.lsp.enable(server_name)
-      end
+      -- Konfiguracja serwera ESLint
+      vim.lsp.config("eslint", {
+        cmd = { "eslint-lsp", "--stdio" },
+        filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
+        capabilities = cmp_capabilities,
+        on_attach = on_attach,
+      })
+      vim.lsp.enable("eslint")
 
-      -- Diagnostics: ciemno-żółte wirtualne linie
-      local info = require("utils.info")
-
-      vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, result, ctx, _)
-        local bufnr = ctx.bufnr
-        local diagnostics = result.diagnostics
-        info.render_virtual_lines(bufnr, diagnostics)
-      end
+      -- Konfiguracja serwera Prettier
+      vim.lsp.config("prettier", {
+        cmd = { "prettier-lsp", "--stdio" },
+        filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
+        capabilities = cmp_capabilities,
+        on_attach = on_attach,
+      })
+      vim.lsp.enable("prettier")
     end,
   },
 }

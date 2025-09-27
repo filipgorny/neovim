@@ -1,7 +1,16 @@
 return {
     'nvim-telescope/telescope.nvim',
     -- tag = '0.1.8', -- Opcjonalnie, jeśli chcesz konkretną wersję
-    dependencies = { 'nvim-lua/plenary.nvim' },
+    dependencies = { 
+        'nvim-lua/plenary.nvim', 
+        {
+            "isak102/telescope-git-file-history.nvim",
+            dependencies = {
+                "nvim-lua/plenary.nvim",
+                "tpope/vim-fugitive"
+            }
+        }    
+    },
     keys = {
         {
             '<leader>f',
@@ -24,9 +33,15 @@ return {
             end,
             desc = 'Select color theme',
         },
+        {
+            '<leader>h',
+            function()
+                require('telescope').extensions.git_file_history.git_file_history()
+            end,
+            desc = 'Git file history'
+        }
     },
     config = function()
-        print('Telescope setup running') -- Debug output
         require('telescope').setup {
             defaults = {
                 mappings = {
@@ -42,5 +57,6 @@ return {
                 },
             },
         }
+        require("telescope").load_extension("git_file_history")
     end,
 }

@@ -1,6 +1,9 @@
-require("config.lazy")
-require("config.keymap")
+require("system.lazy")
+
 require("config.clipboard")
+require("config.editor")
+require("config.keymap")
 require("config.spaces")
 
-require("utils.diagnostics").setup()
+
+require("system.themes")

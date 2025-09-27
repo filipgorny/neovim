@@ -58,7 +58,7 @@ return {
 
       require("neo-tree").setup({
         close_if_last_window = false, -- Close Neo-tree if it is the last window left in the tab
-        popup_border_style = "NC", -- or "" to use 'winborder' on Neovim v0.11+
+        popup_border_style = "", -- or "" to use 'winborder' on Neovim v0.11+
         enable_git_status = true,
         enable_diagnostics = true,
         open_files_do_not_replace_types = { "terminal", "trouble", "qf" }, -- when opening files, do not use windows containing these filetypes or buftypes
@@ -165,7 +165,7 @@ return {
         commands = {},
         window = {
           position = "float",
-          width = 60,
+          width = 90,
           mapping_options = {
             noremap = true,
             nowait = true,
@@ -240,11 +240,11 @@ return {
         filesystem = {
           filtered_items = {
             visible = false, -- when true, they will just be displayed differently than normal items
-            hide_dotfiles = true,
-            hide_gitignored = true,
-            hide_hidden = true, -- only works on Windows for hidden files/directories
+            hide_dotfiles = false,
+            hide_gitignored = false,
+            hide_hidden = false, -- only works on Windows for hidden files/directories
             hide_by_name = {
-              --"node_modules"
+              "node_modules"
             },
             hide_by_pattern = { -- uses glob style patterns
               --"*.meta",

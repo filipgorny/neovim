@@ -10,6 +10,7 @@ vim.keymap.set("i", "<C-S>", function()
 	file.save_file()
 	editing.format_added()
 end)
+
 vim.keymap.set("v", "<C-S>", function()
 	file.save_file()
 	editing.format_added()
@@ -19,4 +20,12 @@ vim.keymap.set("n", "<C-S>", function()
 	editing.format_added()
 end)
 
+local review = require("utils.review")
 
+vim.keymap.set("n", "<leader>r", function()
+    review.review_changes();
+end)
+
+vim.keymap.set("n", "<C-a>", function () 
+    editing.select_all();
+end);
