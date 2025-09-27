@@ -1,3 +1,4 @@
+-- file: lua/plugins/lsp-config.lua
 return {
   -- Mason package manager
   {
@@ -16,13 +17,13 @@ return {
       local mason_lsp = require("mason-lspconfig")
       mason_lsp.setup({
         ensure_installed = {
-          "tsserver",
+          "ts_ls",      -- TypeScript Language Server
           "gopls",
           "cssls",
           "html",
-          "pyright",    -- Python
-          "bashls",     -- Bash
-          "clangd",     -- C/C++
+          "pyright",
+          "bashls",
+          "clangd",
         },
         automatic_installation = true,
       })
@@ -40,8 +41,10 @@ return {
     },
     event = { "BufReadPre", "BufNewFile" },
     config = function()
-      local lspconfig = require("lspconfig")
       local cmp_capabilities = require("cmp_nvim_lsp").default_capabilities()
+
+      -- Highlight dla wirtualnych diagnostics
+      vim.cmd([[highlight VirtualDiagnostic guifg=#dcdcaa]])
 
       local function on_attach(client, bufnr)
         local opts = { noremap = true, silent = true, buffer = bufnr }
@@ -58,8 +61,8 @@ return {
         vim.keymap.set("n", "]d", vim.diagnostic.goto_next, opts)
         vim.keymap.set("i", "<C-h>", vim.lsp.buf.signature_help, opts)
 
-        -- Auto-import for TypeScript
-        if client.name == "tsserver" then
+        -- Auto-import / organize imports dla TypeScript
+        if client.name == "ts_ls" then
           vim.api.nvim_create_autocmd("BufWritePre", {
             buffer = bufnr,
             callback = function()
@@ -83,40 +86,30 @@ return {
       end
 
       -- Lista serwerów
-      local servers = {
-        "tsserver",
-        "gopls",
-        "cssls",
-        "html",
-        "pyright",
-        "bashls",
-        "clangd",
-      }
+      local servers = { "ts_ls", "gopls", "cssls", "html", "pyright", "bashls", "clangd" }
 
-      for _, lsp in ipairs(servers) do
-        lspconfig[lsp].setup({
-          capabilities = cmp_capabilities,
+      for _, server_name in ipairs(servers) do
+        vim.lsp.config(server_name, {
           on_attach = on_attach,
-          settings = lsp == "gopls" and {
+          capabilities = cmp_capabilities,
+          settings = server_name == "gopls" and {
             gopls = {
               analyses = { unusedparams = true, shadow = true },
               staticcheck = true,
             }
           } or nil,
         })
+        vim.lsp.enable(server_name)
       end
 
-      -- Diagnostics: błędy jako czerwony tekst pod linijką
-      vim.diagnostic.config({
-        virtual_text = {
-          spacing = 1,
-          prefix = "●",
-          severity = { min = vim.diagnostic.severity.ERROR },
-        },
-        underline = true,
-        signs = true,
-        update_in_insert = false,
-      })
+      -- Diagnostics: ciemno-żółte wirtualne linie
+      local info = require("utils.info")
+
+      vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, result, ctx, _)
+        local bufnr = ctx.bufnr
+        local diagnostics = result.diagnostics
+        info.render_virtual_lines(bufnr, diagnostics)
+      end
     end,
   },
 }

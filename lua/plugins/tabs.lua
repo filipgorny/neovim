@@ -15,13 +15,10 @@ return {
   },
   opts = {
     options = {
-      -- custom buffer delete function
       close_command = function(n) Snacks.bufdelete(n) end,
       right_mouse_command = function(n) Snacks.bufdelete(n) end,
       diagnostics = "nvim_lsp",
       always_show_bufferline = false,
-
-      -- lokalne definicje ikon
       icons = {
         diagnostics = { Error = " ", Warn = " ", Info = " ", Hint = " " },
         ft = {
@@ -35,51 +32,67 @@ return {
           default = "",
         },
       },
-
-      diagnostics_indicator = function(_, _, diag, icons_table)
-        local icons = icons_table or {
-          Error = " ",
-          Warn = " ",
-        }
-        local ret = (diag.error and icons.Error .. diag.error .. " " or "")
-          .. (diag.warning and icons.Warn .. diag.warning or "")
-        return vim.trim(ret)
-      end,
-
-      offsets = {
-        {
-          filetype = "neo-tree",
-          text = "Neo-tree",
-          highlight = "Directory",
-          text_align = "left",
-        },
-        {
-          filetype = "snacks_layout_box",
-        },
-      },
-
-      get_element_icon = function(opts)
-        local ft_icons = {
-          lua = "",
-          javascript = "",
-          typescript = "",
-          go = "",
-          html = "",
-          css = "",
-          json = "",
-        }
-        return ft_icons[opts.filetype] or ""
-      end,
     },
   },
   config = function(_, opts)
-    require("bufferline").setup(opts)
-    -- Fix bufferline when restoring a session
-    vim.api.nvim_create_autocmd({ "BufAdd", "BufDelete" }, {
+    local bufferline = require("bufferline")
+    bufferline.setup(opts)
+
+    -- Historia buforów
+    local buf_history = {}
+    local current_index = 1 -- wskazuje aktualny bufor w historii
+
+    local function add_to_history(buf)
+      for i, b in ipairs(buf_history) do
+        if b == buf then
+          table.remove(buf_history, i)
+          break
+        end
+      end
+      table.insert(buf_history, 1, buf)
+      current_index = 1
+    end
+
+    -- Aktualizacja historii przy wejściu do bufora
+    vim.api.nvim_create_autocmd("BufEnter", {
       callback = function()
-        vim.schedule(function()
-          pcall(nvim_bufferline)
-        end)
+        local buf = vim.api.nvim_get_current_buf()
+        add_to_history(buf)
+      end,
+    })
+
+    -- Przejście do poprzedniego bufora w historii (Alt-b)
+    local function go_prev_buf()
+      if #buf_history < 2 then return end
+      current_index = current_index + 1
+      if current_index > #buf_history then
+        current_index = 1
+      end
+      vim.api.nvim_set_current_buf(buf_history[current_index])
+    end
+
+    -- Przejście do następnego bufora w historii (Alt-n)
+    local function go_next_buf()
+      if #buf_history < 2 then return end
+      current_index = current_index - 1
+      if current_index < 1 then
+        current_index = #buf_history
+      end
+      vim.api.nvim_set_current_buf(buf_history[current_index])
+    end
+
+    -- Keymapy do historii buforów
+    vim.keymap.set("n", "<M-b>", go_prev_buf, { noremap = true, silent = true })
+    vim.keymap.set("n", "<M-n>", go_next_buf, { noremap = true, silent = true })
+
+    -- Nowy plik zawsze w nowej zakładce
+    vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+      callback = function(args)
+        local buf = args.buf
+        local ft = vim.api.nvim_buf_get_option(buf, "filetype")
+        if ft ~= "help" and ft ~= "terminal" and buf ~= vim.api.nvim_get_current_buf() then
+          vim.cmd("tabnew " .. vim.api.nvim_buf_get_name(buf))
+        end
       end,
     })
   end,
