@@ -5,7 +5,7 @@ M.clear_buffer = function()
 end
 
 M.format_added = function()
-  vim.cmd.
+  vim.api.nvim_command("FormatDiff")
 end
 
 return M

@@ -15,7 +15,15 @@ return {
     config = function()
       local mason_lsp = require("mason-lspconfig")
       mason_lsp.setup({
-        ensure_installed = { "tserver", "gopls" },
+        ensure_installed = {
+          "tsserver",
+          "gopls",
+          "cssls",
+          "html",
+          "pyright",    -- Python
+          "bashls",     -- Bash
+          "clangd",     -- C/C++
+        },
         automatic_installation = true,
       })
     end,
@@ -38,7 +46,6 @@ return {
       local function on_attach(client, bufnr)
         local opts = { noremap = true, silent = true, buffer = bufnr }
 
-        -- Keymaps
         vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
         vim.keymap.set("n", "gD", vim.lsp.buf.declaration, opts)
         vim.keymap.set("n", "gi", vim.lsp.buf.implementation, opts)
@@ -46,13 +53,13 @@ return {
         vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
         vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, opts)
         vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, opts)
-        vim.keymap.set("n", "<leader>r", vim.diagnostic.open_float, opts) -- show errors
+        vim.keymap.set("n", "<leader>r", vim.diagnostic.open_float, opts)
         vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, opts)
         vim.keymap.set("n", "]d", vim.diagnostic.goto_next, opts)
         vim.keymap.set("i", "<C-h>", vim.lsp.buf.signature_help, opts)
 
         -- Auto-import for TypeScript
-        if client.name == "tsserver" or client.name == "typescript-language-server" then
+        if client.name == "tsserver" then
           vim.api.nvim_create_autocmd("BufWritePre", {
             buffer = bufnr,
             callback = function()
@@ -69,31 +76,37 @@ return {
           vim.lsp.semantic_tokens.on_attach(client, bufnr)
         end
 
-        -- Inline type hints (Neovim 0.10+)
+        -- Inline type hints
         if client.supports_method("textDocument/inlayHint") then
           vim.lsp.buf.inlay_hint(bufnr, true)
         end
       end
 
-      -- Setup servers
-      local servers = { "typescript-language-server", "gopls" }
+      -- Lista serwerów
+      local servers = {
+        "tsserver",
+        "gopls",
+        "cssls",
+        "html",
+        "pyright",
+        "bashls",
+        "clangd",
+      }
+
       for _, lsp in ipairs(servers) do
         lspconfig[lsp].setup({
           capabilities = cmp_capabilities,
           on_attach = on_attach,
           settings = lsp == "gopls" and {
             gopls = {
-              analyses = {
-                unusedparams = true,
-                shadow = true,
-              },
+              analyses = { unusedparams = true, shadow = true },
               staticcheck = true,
             }
           } or nil,
         })
       end
 
-      -- Diagnostics: errors below the line, red virtual text
+      -- Diagnostics: błędy jako czerwony tekst pod linijką
       vim.diagnostic.config({
         virtual_text = {
           spacing = 1,
