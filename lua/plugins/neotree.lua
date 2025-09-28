@@ -37,8 +37,8 @@ return {
       -- In Neovim v0.10+, you can configure them in vim.diagnostic.config(), like:
       --
       vim.diagnostic.config({
-	 float = {source = "always", border =border},
-	virtualtext = false,
+        float = {source = "always", border =border},
+        virtualtext = false,
 
          signs = {
            text = {
@@ -165,7 +165,7 @@ return {
         commands = {},
         window = {
           position = "float",
-          width = 90,
+          width = 120,
           mapping_options = {
             noremap = true,
             nowait = true,
@@ -235,7 +235,7 @@ return {
             -- },
           },
         },
-	use_float = true,
+      	use_float = true,
         nesting_rules = {},
         filesystem = {
           filtered_items = {

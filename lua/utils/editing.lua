@@ -18,4 +18,93 @@ M.reload_current = function()
     print("Reloaded " .. file)
 end
 
+M.snapshot = {
+  filename = "",
+  lines = {}
+}
+
+M.get_current_filename = function()
+  return vim.api.nvim_buf_get_name(0)
+end
+
+M.update_snapshot = function()
+  vim.notify("Updating snapshot.")
+  M.snapshot.lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  M.snapshot.filename = M.get_current_filename()
+end
+
+M.setup = function()
+  vim.api.nvim_create_autocmd({ "BufNewFile", "BufReadPost" }, {
+    callback = function()
+      M.update_snapshot()
+    end,
+  })
+end
+
+M.format_modifications = function()
+  local conform = require("conform");
+
+  if M.snapshot.filename ~= M.get_current_filename() then
+    vim.notify("Snapshot is not for the current file")
+    return
+  end
+
+  local snapshot = M.snapshot.lines
+
+  local bufnr = 0
+
+  -- pobierz aktualne linie
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+  -- znajdź zmienione linie
+  local modified_lines = {}
+
+  for i = 1, #lines do
+    if snapshot[i] ~= nil then
+      vim.notify("Comparing " .. lines[i] .. " - " .. snapshot[i])
+    end
+
+    if snapshot[i] ~= nil and snapshot[i] ~= lines[i] then
+      table.insert(modified_lines, i)
+    end
+  end
+
+  if #modified_lines == 0 then
+    vim.notify("No modified lines to format", vim.log.levels.INFO)
+    return
+  end
+
+  -- grupujemy linie w zakresy
+  local ranges = {}
+  local start_line = modified_lines[1]
+  local prev = modified_lines[1]
+  for i = 2, #modified_lines do
+    if modified_lines[i] == prev + 1 then
+      prev = modified_lines[i]
+    else
+      table.insert(ranges, { start_line, prev })
+      start_line = modified_lines[i]
+      prev = modified_lines[i]
+    end
+  end
+  table.insert(ranges, { start_line, prev })
+
+  -- wywołanie conform dla każdego zakresu
+  for _, r in ipairs(ranges) do
+    local start0 = r[1] - 1
+    local end0 = r[2]
+    if start0 < end0 then
+      conform.format({
+        async = true,
+        lsp_fallback = true,
+        range = {
+          start = { start0, 0 },
+          ["end"] = { end0, 0 },
+        },
+      })
+    end
+  end
+
+  M.update_snapshot()
+end
 return M

@@ -1,31 +1,15 @@
 -- map leader to <Space>
 vim.keymap.set("n", " ", "<Space>", { silent = true, remap = false })
 vim.g.mapleader = " "
-vim.keymap.set("n"," ",":make")
 
 local file = require("utils.file")
 local editing = require("utils.editing")
+local keymap = require("utils.keymap")
 
-vim.keymap.set("i", "<C-S>", function()
-	file.save_file()
-	editing.format_added()
+keymap.bind_for_all("<C-s>", function ()
+  file.save_file()
+  editing.format_modifications()
 end)
 
-vim.keymap.set("v", "<C-S>", function()
-	file.save_file()
-	editing.format_added()
-end)
-vim.keymap.set("n", "<C-S>", function()
-	file.save_file()
-	editing.format_added()
-end)
+keymap.bind_for_all("<C-a>", editing.select_all)
 
-local review = require("utils.review")
-
-vim.keymap.set("n", "<leader>r", function()
-    review.review_changes();
-end)
-
-vim.keymap.set("n", "<C-a>", function () 
-    editing.select_all();
-end);
