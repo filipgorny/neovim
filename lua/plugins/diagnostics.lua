@@ -107,5 +107,20 @@ return {
 
         })
         vim.diagnostic.config({ virtual_text = false }) -- Disable default virtual text
+        
+        vim.api.nvim_create_autocmd({
+            "VimEnter",      -- start Neovima
+            "BufEnter",      -- wejście do bufora (w tym pierwszy plik)
+            "BufReadPost",   -- po wczytaniu pliku
+            "BufWritePost",  -- po zapisaniu
+            "InsertLeave",   -- po wyjściu z insert mode
+            "TextChanged",   -- po zmianie tekstu
+        }, {
+            callback = function()
+                -- aktualizuj quickfix listę z błędami LSP
+                vim.diagnostic.setqflist({ open = false })
+            end,
+        })
+
     end
 }
