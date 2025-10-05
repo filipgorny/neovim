@@ -8,5 +8,5 @@ require("config.spaces")
 require("utils.editing").setup();
 
 require("system.themes")
-require("system.auto-reopen")
+--require("system.session")
 

@@ -1,7 +1,7 @@
 return {
     'nvim-telescope/telescope.nvim',
     -- tag = '0.1.8', -- Opcjonalnie, jeśli chcesz konkretną wersję
-    dependencies = { 
+    dependencies = {
         'nvim-lua/plenary.nvim', 
         "isak102/telescope-git-file-history.nvim",
          dependencies = {
@@ -38,13 +38,6 @@ return {
                 require('telescope').extensions.git_file_history.git_file_history()
             end,
             desc = 'Git file history'
-        },
-        {
-            '<leader>d',
-            function()
-                require('git_branch').files()
-            end,
-            desc = 'Git diff'
         }
     },
     config = function()
@@ -64,6 +57,5 @@ return {
             },
         }
         require("telescope").load_extension("diff")
-        require('telescope').load_extension('git_branch')
     end,
 }

@@ -1,5 +1,7 @@
 local M = {}
 
+local string = require("utils.string")
+
 M.clear_buffer = function()
   vim.cmd("<Esc>gg^vGd")
 end
@@ -28,13 +30,12 @@ M.get_current_filename = function()
 end
 
 M.update_snapshot = function()
-  vim.notify("Updating snapshot.")
   M.snapshot.lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
   M.snapshot.filename = M.get_current_filename()
 end
 
 M.setup = function()
-  vim.api.nvim_create_autocmd({ "BufNewFile", "BufReadPost" }, {
+  vim.api.nvim_create_autocmd({ "BufNewFile", "BufReadPost", "BufEnter" }, {
     callback = function()
       M.update_snapshot()
     end,
@@ -64,8 +65,10 @@ M.format_modifications = function()
       vim.notify("Comparing " .. lines[i] .. " - " .. snapshot[i])
     end
 
-    if snapshot[i] ~= nil and snapshot[i] ~= lines[i] then
-      table.insert(modified_lines, i)
+    if not string.is_blank(lines[i]) then
+      if snapshot[i] == nil or snapshot[i] ~= lines[i] then
+        table.insert(modified_lines, i)
+      end
     end
   end
 
@@ -73,8 +76,6 @@ M.format_modifications = function()
     vim.notify("No modified lines to format", vim.log.levels.INFO)
     return
   end
-
-  -- grupujemy linie w zakresy
   local ranges = {}
   local start_line = modified_lines[1]
   local prev = modified_lines[1]
@@ -89,9 +90,8 @@ M.format_modifications = function()
   end
   table.insert(ranges, { start_line, prev })
 
-  -- wywołanie conform dla każdego zakresu
   for _, r in ipairs(ranges) do
-    local start0 = r[1] - 1
+    local start0 = r[1]
     local end0 = r[2]
     if start0 < end0 then
       conform.format({

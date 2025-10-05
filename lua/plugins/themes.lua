@@ -20,7 +20,7 @@ return {
   { "nyoom-engineering/oxocarbon.nvim", priority = 1000 },
   { "rose-pine/neovim", name = "rose-pine", priority = 1000 },
   { "rebelot/kanagawa.nvim", priority = 1000 },
-  
+
   {
     "nvim-telescope/telescope.nvim",
     dependencies = { "nvim-lua/plenary.nvim" },

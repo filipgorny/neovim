@@ -6,10 +6,13 @@ local file = require("utils.file")
 local editing = require("utils.editing")
 local keymap = require("utils.keymap")
 
-keymap.bind_for_all("<C-s>", function ()
+keymap.bind_for_all("<C-s>", function()
   file.save_file()
   editing.format_modifications()
 end)
 
-keymap.bind_for_all("<C-a>", editing.select_all)
+keymap.bind_for_all("<S-q>", function()
+  vim.api.nvim_buf_delete(0, { force = false })
+end)
 
+keymap.bind_for_all("<C-a>", editing.select_all)

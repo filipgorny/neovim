@@ -99,11 +99,14 @@ return {
         end,
       },
       experimental = {
-        ghost_text = {
-          hl_group = "CmpGhostText",
-        },
+        ghost_text = false
       },
       sorting = defaults.sorting,
+      init_options = {
+        preferences = {
+          importModuleSpecifierPreference = "relative"
+        }
+      },
     }
   end,
 }
