@@ -33,6 +33,7 @@ keymap.bind("n", "<leader>af", llm.review_file)        -- Review current file ch
 keymap.bind("n", "<leader>ac", llm.analyze_file)       -- Analyze current file (bugs, quality, etc)
 keymap.bind("v", "<leader>aa", llm.ask_about_selection) -- Ask about selected code
 keymap.bind("n", "<leader>ai", llm.open_chat)          -- Open interactive chat with Claude
+keymap.bind("n", "<leader>ap", llm.apply_chat_changes) -- Apply code changes from chat
 keymap.bind("n", "<leader>ax", llm.clear_chat)         -- Clear chat history
 
 

@@ -467,7 +467,57 @@ local chat_state = {
   input_win = nil,
   messages = {}, -- Conversation history
   is_waiting = false,
+  system_prompt = nil, -- Context about project/file
+  last_response = nil, -- Store last Claude response for code extraction
 }
+
+-- Gather project context
+local function gather_context()
+  local context = {}
+
+  -- Current file info
+  local current_file = vim.api.nvim_buf_get_name(0)
+  if current_file and current_file ~= "" then
+    local filetype = vim.api.nvim_buf_get_option(0, "filetype")
+    local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+    local content = table.concat(lines, "\n")
+
+    table.insert(context, "## Current File")
+    table.insert(context, string.format("File: %s", vim.fn.fnamemodify(current_file, ":.")))
+    table.insert(context, string.format("Type: %s", filetype))
+    table.insert(context, "\n```" .. filetype)
+    table.insert(context, content)
+    table.insert(context, "```\n")
+  end
+
+  -- Project structure (limited depth to avoid too much context)
+  local git_root = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")[1]
+  if git_root and vim.v.shell_error == 0 then
+    table.insert(context, "## Project Structure")
+    table.insert(context, "Git root: " .. git_root)
+
+    -- Get file tree (max 2 levels, exclude common dirs)
+    local tree_cmd = "find " .. vim.fn.shellescape(git_root) ..
+                     " -maxdepth 2 -type f " ..
+                     " -not -path '*/node_modules/*' " ..
+                     " -not -path '*/.git/*' " ..
+                     " -not -path '*/dist/*' " ..
+                     " -not -path '*/build/*' " ..
+                     " 2>/dev/null | head -50"
+    local files = vim.fn.systemlist(tree_cmd)
+
+    if #files > 0 then
+      table.insert(context, "\nKey files:")
+      for _, file in ipairs(files) do
+        local rel_path = file:gsub("^" .. git_root .. "/", "")
+        table.insert(context, "  - " .. rel_path)
+      end
+    end
+    table.insert(context, "")
+  end
+
+  return table.concat(context, "\n")
+end
 
 -- Add message to chat history
 local function add_message(role, content)
@@ -540,12 +590,19 @@ local function send_chat_message(user_message)
     return
   end
 
-  -- Prepare request with conversation history
-  local payload = vim.fn.json_encode({
+  -- Prepare request with conversation history and system prompt
+  local payload_data = {
     model = "claude-sonnet-4-20250514",
     max_tokens = 4096,
     messages = chat_state.messages
-  })
+  }
+
+  -- Add system prompt with context if available
+  if chat_state.system_prompt then
+    payload_data.system = chat_state.system_prompt
+  end
+
+  local payload = vim.fn.json_encode(payload_data)
 
   local payload_file = vim.fn.tempname()
   local response_file = vim.fn.tempname()
@@ -613,9 +670,36 @@ local function send_chat_message(user_message)
             vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
           end
 
+          -- Store response for potential code extraction
+          chat_state.last_response = assistant_message
+
           -- Add to history and display
           add_message("assistant", assistant_message)
           display_message("assistant", assistant_message)
+
+          -- Check if response contains code changes
+          local code_blocks = extract_code_blocks(assistant_message)
+          if #code_blocks > 0 then
+            -- Add apply suggestion at the bottom of chat
+            vim.schedule(function()
+              if chat_state.bufnr and vim.api.nvim_buf_is_valid(chat_state.bufnr) then
+                vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", true)
+                vim.api.nvim_buf_set_lines(chat_state.bufnr, -1, -1, false, {
+                  "",
+                  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                  "💡 Code suggestions detected! Press <leader>ap to apply changes",
+                  ""
+                })
+                vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
+
+                -- Scroll to bottom
+                if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
+                  local line_count = vim.api.nvim_buf_line_count(chat_state.bufnr)
+                  vim.api.nvim_win_set_cursor(chat_state.win, {line_count, 0})
+                end
+              end
+            end)
+          end
 
           chat_state.is_waiting = false
         end)
@@ -653,12 +737,102 @@ local function submit_input()
   send_chat_message(input_text)
 end
 
+-- Apply code changes from chat
+M.apply_chat_changes = function()
+  if not chat_state.last_response then
+    vim.notify("No code suggestions to apply", vim.log.levels.WARN)
+    return
+  end
+
+  local code_blocks = extract_code_blocks(chat_state.last_response)
+  if #code_blocks == 0 then
+    vim.notify("No code blocks found in last response", vim.log.levels.WARN)
+    return
+  end
+
+  -- If multiple code blocks, let user choose
+  if #code_blocks > 1 then
+    local options = {}
+    for i, block in ipairs(code_blocks) do
+      local lang = block.language or "code"
+      local line_count = select(2, block.code:gsub("\n", "\n")) + 1
+      table.insert(options, string.format("%d. [%s] %d lines", i, lang, line_count))
+    end
+
+    vim.ui.select(options, {
+      prompt = "Select code block to apply:",
+    }, function(_, idx)
+      if idx then
+        apply_code_to_file(code_blocks[idx].code)
+      end
+    end)
+  else
+    apply_code_to_file(code_blocks[1].code)
+  end
+end
+
+-- Apply code to current file
+function apply_code_to_file(code)
+  local current_file = vim.api.nvim_buf_get_name(0)
+  if not current_file or current_file == "" then
+    vim.notify("No file currently open to apply changes to", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Ask for confirmation
+  vim.ui.select({
+    "Replace entire file",
+    "Insert at cursor",
+    "Cancel"
+  }, {
+    prompt = "How to apply the code?",
+  }, function(choice)
+    if choice == "Replace entire file" then
+      local lines = {}
+      for line in code:gmatch("[^\n]+") do
+        table.insert(lines, line)
+      end
+
+      local bufnr = vim.api.nvim_get_current_buf()
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+      vim.notify("Applied code to " .. vim.fn.fnamemodify(current_file, ":."), vim.log.levels.INFO)
+
+    elseif choice == "Insert at cursor" then
+      local lines = {}
+      for line in code:gmatch("[^\n]+") do
+        table.insert(lines, line)
+      end
+
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      local row = cursor[1]
+      vim.api.nvim_buf_set_lines(0, row, row, false, lines)
+      vim.notify("Inserted code at cursor", vim.log.levels.INFO)
+    end
+  end)
+end
+
 -- Open interactive chat window
 M.open_chat = function()
   -- If already open, just focus it
   if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
     vim.api.nvim_set_current_win(chat_state.win)
     return
+  end
+
+  -- Gather project context on first open
+  if not chat_state.system_prompt then
+    local context = gather_context()
+    chat_state.system_prompt = string.format([[You are Claude, an AI assistant integrated into Neovim. You have access to the user's current project and file.
+
+IMPORTANT INSTRUCTIONS:
+- When the user asks you to modify code, ALWAYS provide the complete updated code in a code block
+- Be concise but thorough
+- If you suggest code changes, wrap them in markdown code blocks with the appropriate language tag
+- You can see the current file and project structure below
+
+%s
+
+The user can apply your code suggestions directly from the chat using <leader>ap.]], context)
   end
 
   -- Calculate dimensions
