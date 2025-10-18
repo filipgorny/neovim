@@ -204,6 +204,7 @@ return {
               },
             },
             ["A"] = "add_directory", -- also accepts the optional config.show_path option like "add". this also supports BASH style brace expansion.
+            ["g"] = "generate_file", -- Generate file with code generator
             ["d"] = "delete",
             ["r"] = "rename",
             ["b"] = "rename_basename",
@@ -315,7 +316,52 @@ return {
             },
           },
 
-          commands = {}, -- Add a custom command or override a global one using the same function name
+          commands = {
+            -- Custom command to create file with generator
+            generate_file = function(state)
+              local node = state.tree:get_node()
+              local parent_dir
+
+              if node.type == "directory" then
+                parent_dir = node:get_id()
+              else
+                parent_dir = vim.fn.fnamemodify(node:get_id(), ":h")
+              end
+
+              -- Use NeoTree's built-in input function for consistent UI
+              local inputs = require("neo-tree.ui.inputs")
+              inputs.input("File name: ", "", function(filename)
+                if not filename or filename == "" then
+                  return
+                end
+
+                -- Create full path
+                local filepath = parent_dir .. "/" .. filename
+
+                -- Close NeoTree before opening Telescope
+                vim.cmd("Neotree close")
+
+                -- Small delay to ensure NeoTree is fully closed
+                vim.defer_fn(function()
+                  -- Show generator picker
+                  local generator = require("utils.generator")
+                  generator.pick(function(gen_name, gen_module)
+                    -- Create the file
+                    local file = io.open(filepath, "w")
+                    if file then
+                      file:close()
+                    end
+
+                    -- Open the file in a buffer
+                    vim.cmd("edit " .. vim.fn.fnameescape(filepath))
+
+                    -- Run the generator (it will insert into the now-open buffer)
+                    gen_module.generate()
+                  end)
+                end, 100)
+              end)
+            end,
+          }, -- Add a custom command or override a global one using the same function name
         },
         buffers = {
           follow_current_file = {

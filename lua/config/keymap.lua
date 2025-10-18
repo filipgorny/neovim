@@ -7,6 +7,7 @@ local editing = require("utils.editing")
 local keymap = require("utils.keymap")
 local llm = require("utils.llm")
 local git = require("utils.git")
+local generator = require("utils.generator")
 
 keymap.bind_for_all("<C-s>", function()
   file.save_file()
@@ -38,5 +39,8 @@ keymap.bind("v", "<leader>aa", llm.ask_about_selection) -- Ask about selected co
 keymap.bind("n", "<leader>ai", llm.open_chat)          -- Open interactive chat with Claude
 keymap.bind("n", "<leader>ap", llm.apply_chat_changes) -- Apply code changes from chat
 keymap.bind("n", "<leader>ax", llm.clear_chat)         -- Clear chat history
+
+-- Code generators
+keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
 
 
