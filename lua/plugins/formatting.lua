@@ -15,6 +15,18 @@ return {
           go = { "gofmt" },
         },
         format_on_save = false, -- we want manual control
+        formatters = {
+          prettier = {
+            prepend_args = function()
+              return {
+                "--print-width", "100",
+                -- Preserve empty lines (don't collapse multiple blank lines)
+                -- Note: Prettier doesn't have a direct option for this, but we can
+                -- configure it via .prettierrc instead
+              }
+            end,
+          },
+        },
       })
 
       -- Format whole file

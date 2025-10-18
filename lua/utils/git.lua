@@ -119,4 +119,38 @@ M.review_changes = function()
   ):find()
 end
 
+-- Navigate to next git hunk/change
+M.next_hunk = function()
+  if vim.wo.diff then
+    vim.cmd('normal! ]c')
+    return
+  end
+
+  local ok, gitsigns = pcall(require, 'gitsigns')
+  if ok then
+    vim.schedule(function()
+      gitsigns.next_hunk()
+    end)
+  else
+    vim.notify("Gitsigns not loaded", vim.log.levels.WARN)
+  end
+end
+
+-- Navigate to previous git hunk/change
+M.prev_hunk = function()
+  if vim.wo.diff then
+    vim.cmd('normal! [c')
+    return
+  end
+
+  local ok, gitsigns = pcall(require, 'gitsigns')
+  if ok then
+    vim.schedule(function()
+      gitsigns.prev_hunk()
+    end)
+  else
+    vim.notify("Gitsigns not loaded", vim.log.levels.WARN)
+  end
+end
+
 return M

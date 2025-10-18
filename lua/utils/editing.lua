@@ -93,7 +93,18 @@ M.format_modifications = function()
   for _, r in ipairs(ranges) do
     local start0 = r[1]
     local end0 = r[2]
-    if start0 < end0 then
+
+    -- Check if the range contains any non-empty lines
+    local has_content = false
+    for i = start0, end0 do
+      if not string.is_blank(lines[i]) then
+        has_content = true
+        break
+      end
+    end
+
+    -- Only format if there's actual content (not just empty lines)
+    if start0 < end0 and has_content then
       conform.format({
         async = true,
         lsp_fallback = true,
