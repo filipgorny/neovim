@@ -10,4 +10,5 @@ require("system.themes")
 
 require("utils.editing").setup()
 require("system.session").setup()
+require("system.autocomplete").setup()
 

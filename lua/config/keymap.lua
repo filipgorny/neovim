@@ -27,6 +27,9 @@ vim.keymap.set("v", "<C-c>", '"+y', { noremap = true, silent = true })
 vim.keymap.set("n", "<S-]>", git.next_hunk, { noremap = true, silent = true, desc = "Next git change" })
 vim.keymap.set("n", "<S-[>", git.prev_hunk, { noremap = true, silent = true, desc = "Previous git change" })
 
+-- Git branch switching with session management
+keymap.bind("n", "<leader>gb", git.switch_branch) -- Switch git branch with auto-save/stash/session
+
 -- LLM/AI keybindings
 keymap.bind("n", "<leader>ar", llm.review_diff)        -- Review all git changes
 keymap.bind("n", "<leader>af", llm.review_file)        -- Review current file changes

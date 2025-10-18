@@ -63,6 +63,9 @@ local function save_session()
   end
 end
 
+-- Export save_session
+M.save_session = save_session
+
 vim.keymap.set("n", "<leader>S", save_session);
 
 local function load_session()
@@ -84,8 +87,42 @@ local function load_session()
           end
         end
       end)
+      return true
     end
   end
+  return false
+end
+
+-- Export load_session with option to force load even with args
+M.load_session = function(force)
+  if force or vim.fn.argc() == 0 then
+    local f = session_file()
+    if vim.fn.filereadable(f) == 1 then
+      vim.cmd("silent! source " .. vim.fn.fnameescape(f))
+
+      -- Po załadowaniu sesji, odśwież LSP i podświetlanie składni dla wszystkich buforów
+      vim.schedule(function()
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_option(buf, "buflisted") then
+            local bufname = vim.api.nvim_buf_get_name(buf)
+            if bufname and bufname ~= "" then
+              -- Triggeruj BufRead i BufEnter żeby aktywować LSP i treesitter
+              vim.api.nvim_exec_autocmds("BufRead", { buffer = buf })
+              vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf })
+            end
+          end
+        end
+      end)
+      return true
+    end
+  end
+  return false
+end
+
+-- Check if session file exists
+M.session_exists = function()
+  local f = session_file()
+  return vim.fn.filereadable(f) == 1
 end
 
 M.setup = function()

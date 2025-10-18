@@ -34,6 +34,8 @@ local function parse_git_status()
   return entries
 end
 
+-- test test test
+
 -- Główny picker
 M.review_changes = function()
   local entries = parse_git_status()
@@ -151,6 +153,229 @@ M.prev_hunk = function()
   else
     vim.notify("Gitsigns not loaded", vim.log.levels.WARN)
   end
+end
+
+-- Get current git branch
+local function get_current_branch()
+  local handle = io.popen("git rev-parse --abbrev-ref HEAD 2>/dev/null")
+  if not handle then return nil end
+
+  local branch = handle:read("*l")
+  handle:close()
+
+  if branch and branch ~= "" then
+    return branch
+  end
+  return nil
+end
+
+-- Save all modified buffers
+local function save_all_buffers()
+  local saved_count = 0
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_get_option(bufnr, "modified") then
+      local bufname = vim.api.nvim_buf_get_name(bufnr)
+      if bufname ~= "" then
+        vim.api.nvim_buf_call(bufnr, function()
+          vim.cmd("silent! write")
+        end)
+        saved_count = saved_count + 1
+      end
+    end
+  end
+  return saved_count
+end
+
+-- Check if there are uncommitted changes (staged or unstaged)
+local function has_uncommitted_changes()
+  local handle = io.popen("git status --porcelain 2>/dev/null")
+  if not handle then return false end
+
+  local output = handle:read("*a")
+  handle:close()
+
+  return output and output ~= ""
+end
+
+-- Create a branch-specific git stash
+local function create_branch_stash(branch_name)
+  if not has_uncommitted_changes() then
+    return true -- No changes to stash
+  end
+
+  local stash_name = string.format("autostash-%s-%s", branch_name, os.time())
+  local handle = io.popen(string.format("git stash push -u -m '%s' 2>&1", stash_name))
+  if not handle then
+    vim.notify("Failed to create git stash", vim.log.levels.ERROR)
+    return false
+  end
+
+  local output = handle:read("*a")
+  handle:close()
+
+  vim.notify(string.format("Created stash: %s", stash_name), vim.log.levels.INFO)
+  return true
+end
+
+-- Apply branch-specific git stash if it exists
+local function apply_branch_stash(branch_name)
+  -- Get list of stashes
+  local handle = io.popen("git stash list 2>/dev/null")
+  if not handle then return end
+
+  local stash_index = nil
+  local i = 0
+  for line in handle:lines() do
+    -- Look for stash with matching branch name
+    if line:match("autostash%-" .. branch_name:gsub("%-", "%%-")) then
+      stash_index = i
+      break
+    end
+    i = i + 1
+  end
+  handle:close()
+
+  if stash_index then
+    -- Apply and drop the stash
+    local apply_handle = io.popen(string.format("git stash pop stash@{%d} 2>&1", stash_index))
+    if apply_handle then
+      local output = apply_handle:read("*a")
+      apply_handle:close()
+      vim.notify(string.format("Applied stash for branch: %s", branch_name), vim.log.levels.INFO)
+    end
+  end
+end
+
+-- Switch branch with session and stash management
+M.switch_branch = function()
+  local current_branch = get_current_branch()
+  if not current_branch then
+    vim.notify("Not in a git repository", vim.log.levels.WARN)
+    return
+  end
+
+  -- Get list of branches
+  local handle = io.popen("git branch --all --format='%(refname:short)' 2>/dev/null")
+  if not handle then
+    vim.notify("Failed to get git branches", vim.log.levels.ERROR)
+    return
+  end
+
+  local branches = {}
+  for line in handle:lines() do
+    -- Skip HEAD and current branch marker
+    local branch = line:gsub("^%*%s*", ""):gsub("^origin/", "")
+    if branch ~= "" and branch ~= "HEAD" and branch ~= current_branch then
+      -- Avoid duplicates
+      local already_exists = false
+      for _, existing in ipairs(branches) do
+        if existing == branch then
+          already_exists = true
+          break
+        end
+      end
+      if not already_exists then
+        table.insert(branches, branch)
+      end
+    end
+  end
+  handle:close()
+
+  if #branches == 0 then
+    vim.notify("No other branches found", vim.log.levels.WARN)
+    return
+  end
+
+  -- Show telescope picker
+  pickers.new({}, {
+    prompt_title = string.format("Switch from '%s' to", current_branch),
+    finder = finders.new_table({
+      results = branches,
+      entry_maker = function(entry)
+        return {
+          value = entry,
+          display = entry,
+          ordinal = entry,
+        }
+      end,
+    }),
+    sorter = conf.generic_sorter({}),
+    attach_mappings = function(prompt_bufnr, map)
+      actions.select_default:replace(function()
+        local selection = action_state.get_selected_entry()
+        actions.close(prompt_bufnr)
+
+        local target_branch = selection.value
+        local session_module = require("system.session")
+
+        -- Step 1: Save all unsaved buffers
+        local saved_count = save_all_buffers()
+        if saved_count > 0 then
+          vim.notify(string.format("Saved %d buffer(s)", saved_count), vim.log.levels.INFO)
+        end
+
+        -- Step 2: Save current session
+        if session_module and session_module.save_session then
+          session_module.save_session()
+          vim.notify("Session saved for current branch", vim.log.levels.INFO)
+        end
+
+        -- Step 3: Create stash for current branch if there are uncommitted changes
+        if not create_branch_stash(current_branch) then
+          vim.notify("Failed to stash changes, aborting branch switch", vim.log.levels.ERROR)
+          return
+        end
+
+        -- Step 4: Switch branch
+        vim.notify(string.format("Switching to branch: %s", target_branch), vim.log.levels.INFO)
+        local switch_handle = io.popen(string.format("git checkout %s 2>&1", target_branch))
+        if not switch_handle then
+          vim.notify("Failed to switch branch", vim.log.levels.ERROR)
+          return
+        end
+
+        local switch_output = switch_handle:read("*a")
+        switch_handle:close()
+
+        if switch_output:match("error:") or switch_output:match("fatal:") then
+          vim.notify(string.format("Git error: %s", switch_output), vm.log.levels.ERROR)
+          return
+        end
+
+        -- Step 5: Close all current buffers
+        vim.schedule(function()
+          -- Close all buffers except special ones
+          for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_valid(bufnr) then
+              local bufname = vim.api.nvim_buf_get_name(bufnr)
+              local buftype = vim.api.nvim_buf_get_option(bufnr, "buftype")
+              -- Only close normal file buffers
+              if buftype == "" and bufname ~= "" then
+                vim.api.nvim_buf_delete(bufnr, { force = false })
+              end
+            end
+          end
+
+          -- Step 6: Apply stash for target branch if it exists
+          apply_branch_stash(target_branch)
+
+          -- Step 7: Check if target branch has a session and load it
+          vim.schedule(function()
+            if session_module and session_module.session_exists and session_module.session_exists() then
+              -- Session exists, load it
+              session_module.load_session(true)
+              vim.notify(string.format("Switched to branch: %s (session loaded)", target_branch), vim.log.levels.INFO)
+            else
+              -- No session exists, just show message
+              vim.notify(string.format("Switched to branch: %s (no session found)", target_branch), vim.log.levels.INFO)
+            end
+          end)
+        end)
+      end)
+
+      return true
+    end,
+  }):find()
 end
 
 return M
