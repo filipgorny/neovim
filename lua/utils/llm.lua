@@ -1,5 +1,55 @@
 local M = {}
 
+-- Configuration
+local config = {
+  model = nil,
+  api_key = nil,
+}
+
+-- Setup LLM with model and configuration
+function M.setup(options)
+  options = options or {}
+
+  -- Set model
+  if options.model then
+    config.model = options.model
+  else
+    -- Default to Claude
+    config.model = require("utils.llm.models.claude")
+  end
+
+  -- Get API key
+  if options.api_key then
+    config.api_key = options.api_key
+  else
+    -- Try to read from .env file
+    local env = require("utils.env")
+    config.api_key = env.get("ANTHROPIC_API_KEY")
+
+    -- Fall back to environment variable
+    if not config.api_key then
+      config.api_key = os.getenv("ANTHROPIC_API_KEY")
+    end
+  end
+
+  -- Configure the model with API key
+  if config.model and config.api_key then
+    config.model:set_api_key(config.api_key)
+  end
+
+  return config.model:is_configured()
+end
+
+-- Get current model
+local function get_model()
+  if not config.model then
+    -- Auto-setup with defaults if not configured
+    M.setup()
+  end
+
+  return config.model
+end
+
 -- Read environment variables from .env file
 local function load_env()
   local env_file = vim.fn.getcwd() .. "/.env"
@@ -34,99 +84,28 @@ local function get_api_key()
 end
 
 -- Send prompt to Claude API
-M.prompt = function(msg, callback)
-  local api_key = get_api_key()
+M.prompt = function(msg, callback, options)
+  local model = get_model()
 
-  if not api_key then
-    vim.notify("ANTHROPIC_API_KEY not found in .env file or environment", vim.log.levels.ERROR)
+  if not model:is_configured() then
+    vim.notify("LLM model not configured. Please run require('utils.llm').setup()", vim.log.levels.ERROR)
     return
   end
 
-  -- Prepare the request payload
-  local payload = vim.fn.json_encode({
-    model = "claude-sonnet-4-20250514",
-    max_tokens = 4096,
-    messages = {
-      {
-        role = "user",
-        content = msg
-      }
-    }
-  })
-
-  -- Create temporary files for request and response
-  local payload_file = vim.fn.tempname()
-  local response_file = vim.fn.tempname()
-
-  -- Write payload to temp file
-  local f = io.open(payload_file, "w")
-  if f then
-    f:write(payload)
-    f:close()
-  else
-    vim.notify("Failed to write request payload", vim.log.levels.ERROR)
-    return
-  end
-
-  -- Make API request using curl
-  local curl_cmd = string.format(
-    'curl -s https://api.anthropic.com/v1/messages ' ..
-    '-H "Content-Type: application/json" ' ..
-    '-H "x-api-key: %s" ' ..
-    '-H "anthropic-version: 2023-06-01" ' ..
-    '-d @%s > %s',
-    api_key,
-    vim.fn.shellescape(payload_file),
-    vim.fn.shellescape(response_file)
-  )
-
-  -- Execute curl asynchronously
-  vim.fn.jobstart(curl_cmd, {
-    on_exit = function(_, exit_code)
-      -- Clean up payload file
-      vim.fn.delete(payload_file)
-
-      if exit_code ~= 0 then
-        vim.notify("API request failed with exit code: " .. exit_code, vim.log.levels.ERROR)
-        vim.fn.delete(response_file)
-        return
+  -- Use the model's prompt method
+  model:prompt(msg, function(response, error)
+    if error then
+      vim.notify("LLM Error: " .. error, vim.log.levels.ERROR)
+      if callback then
+        callback(nil)
       end
-
-      -- Read response
-      local response_content = vim.fn.readfile(response_file)
-      vim.fn.delete(response_file)
-
-      if #response_content == 0 then
-        vim.notify("Empty response from API", vim.log.levels.ERROR)
-        return
-      end
-
-      -- Parse JSON response
-      local ok, response = pcall(vim.fn.json_decode, table.concat(response_content, "\n"))
-      if not ok then
-        vim.notify("Failed to parse API response: " .. tostring(response), vim.log.levels.ERROR)
-        return
-      end
-
-      -- Check for API errors
-      if response.error then
-        vim.notify("API Error: " .. (response.error.message or "Unknown error"), vim.log.levels.ERROR)
-        return
-      end
-
-      -- Extract text from response
-      if response.content and response.content[1] and response.content[1].text then
-        local text = response.content[1].text
-        if callback then
-          vim.schedule(function()
-            callback(text)
-          end)
-        end
-      else
-        vim.notify("Unexpected response format", vim.log.levels.ERROR)
-      end
+      return
     end
-  })
+
+    if callback then
+      callback(response)
+    end
+  end, options)
 end
 
 -- Extract code blocks from markdown response
@@ -469,6 +448,8 @@ local chat_state = {
   is_waiting = false,
   system_prompt = nil, -- Context about project/file
   last_response = nil, -- Store last Claude response for code extraction
+  user_name = "User",
+  assistant_name = nil, -- Will be set from model name
 }
 
 -- Gather project context
@@ -529,44 +510,34 @@ end
 
 -- Display message in chat buffer
 local function display_message(role, content)
-  if not chat_state.bufnr or not vim.api.nvim_buf_is_valid(chat_state.bufnr) then
-    return
-  end
+  local ui = require("utils.ui")
+  local model = get_model()
 
-  -- Make buffer modifiable temporarily
-  vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", true)
-
-  local lines = {}
-
-  -- Add role header
+  -- Determine sender name
+  local sender_name
+  local is_user = false
   if role == "user" then
-    table.insert(lines, "")
-    table.insert(lines, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    table.insert(lines, "You:")
+    sender_name = chat_state.user_name or "User"
+    is_user = true
   else
-    table.insert(lines, "")
-    table.insert(lines, "Claude:")
+    sender_name = chat_state.assistant_name or (model and model:get_name() or "Assistant")
+    is_user = false
   end
 
-  -- Add content
-  for line in content:gmatch("[^\n]+") do
-    table.insert(lines, line)
+  -- Get window width for proper formatting
+  local width = 120
+  if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
+    width = vim.api.nvim_win_get_width(chat_state.win)
   end
 
-  -- Append to buffer
-  vim.api.nvim_buf_set_lines(chat_state.bufnr, -1, -1, false, lines)
+  -- Display the message using ui.lua
+  ui.display_chat_message(chat_state.bufnr, content, sender_name, is_user, width)
 
   -- Scroll to bottom
-  if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
-    local line_count = vim.api.nvim_buf_line_count(chat_state.bufnr)
-    vim.api.nvim_win_set_cursor(chat_state.win, {line_count, 0})
-  end
-
-  -- Make buffer read-only again
-  vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
+  ui.scroll_to_bottom(chat_state.bufnr, chat_state.win)
 end
 
--- Send message to Claude with conversation context
+-- Send message to Claude with conversation context (with streaming)
 local function send_chat_message(user_message)
   if chat_state.is_waiting then
     vim.notify("Please wait for the current response", vim.log.levels.WARN)
@@ -579,162 +550,132 @@ local function send_chat_message(user_message)
   add_message("user", user_message)
   display_message("user", user_message)
 
-  -- Show loading indicator
-  display_message("assistant", "● Thinking...")
-
-  -- Get API key
-  local api_key = get_api_key()
-  if not api_key then
-    vim.notify("ANTHROPIC_API_KEY not found in .env file or environment", vim.log.levels.ERROR)
+  -- Get model
+  local model = get_model()
+  if not model or not model:is_configured() then
+    vim.notify("LLM model not configured", vim.log.levels.ERROR)
     chat_state.is_waiting = false
     return
   end
 
-  -- Prepare request with conversation history and system prompt
-  local payload_data = {
-    model = "claude-sonnet-4-20250514",
-    max_tokens = 4096,
-    messages = chat_state.messages
-  }
-
-  -- Add system prompt with context if available
-  if chat_state.system_prompt then
-    payload_data.system = chat_state.system_prompt
+  -- Check if model supports streaming
+  if not model.stream then
+    vim.notify("Model does not support streaming", vim.log.levels.ERROR)
+    chat_state.is_waiting = false
+    return
   end
 
-  local payload = vim.fn.json_encode(payload_data)
+  local ui = require("utils.ui")
 
-  local payload_file = vim.fn.tempname()
-  local response_file = vim.fn.tempname()
-
-  local f = io.open(payload_file, "w")
-  if f then
-    f:write(payload)
-    f:close()
+  -- Get window width
+  local width = 120
+  if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
+    width = vim.api.nvim_win_get_width(chat_state.win)
   end
 
-  local curl_cmd = string.format(
-    'curl -s https://api.anthropic.com/v1/messages ' ..
-    '-H "Content-Type: application/json" ' ..
-    '-H "x-api-key: %s" ' ..
-    '-H "anthropic-version: 2023-06-01" ' ..
-    '-d @%s > %s',
-    api_key,
-    vim.fn.shellescape(payload_file),
-    vim.fn.shellescape(response_file)
-  )
+  -- Create streaming display handler
+  local sender_name = chat_state.assistant_name or model:get_name()
+  local display = ui.create_streaming_display(chat_state.bufnr, sender_name, false, width)
 
-  vim.fn.jobstart(curl_cmd, {
-    on_exit = function(_, exit_code)
-      vim.fn.delete(payload_file)
+  local streaming_text = ""
 
-      if exit_code ~= 0 then
+  -- Show initial loading message
+  vim.notify("Sending message to " .. (chat_state.assistant_name or "Assistant") .. "...", vim.log.levels.INFO)
+
+  -- Check if stream method exists
+  if type(model.stream) ~= "function" then
+    vim.notify("ERROR: model.stream is not a function! Type: " .. type(model.stream), vim.log.levels.ERROR)
+    chat_state.is_waiting = false
+    return
+  end
+
+  -- Stream the response
+  local ok, err = pcall(function()
+    model:stream(
+      nil, -- prompt (will use messages from options)
+      -- on_chunk callback
+      function(chunk)
+        -- Initialize display on first chunk
+        if streaming_text == "" then
+          display.init()
+        end
+
+        streaming_text = streaming_text .. chunk
+
+        -- Update display with accumulated text
+        display.update(streaming_text)
+
+        -- Scroll to bottom
+        ui.scroll_to_bottom(chat_state.bufnr, chat_state.win)
+      end,
+    -- on_done callback
+    function(full_text, error)
+      if error then
         vim.schedule(function()
-          display_message("system", "Error: API request failed")
-          chat_state.is_waiting = false
-        end)
-        vim.fn.delete(response_file)
-        return
-      end
+          vim.notify("Stream Error: " .. tostring(error), vim.log.levels.ERROR)
 
-      local response_content = vim.fn.readfile(response_file)
-      vim.fn.delete(response_file)
-
-      if #response_content == 0 then
-        vim.schedule(function()
-          display_message("system", "Error: Empty response")
-          chat_state.is_waiting = false
-        end)
-        return
-      end
-
-      local ok, response = pcall(vim.fn.json_decode, table.concat(response_content, "\n"))
-      if not ok or response.error then
-        vim.schedule(function()
-          display_message("system", "Error: " .. (response.error and response.error.message or "Failed to parse response"))
-          chat_state.is_waiting = false
-        end)
-        return
-      end
-
-      if response.content and response.content[1] and response.content[1].text then
-        local assistant_message = response.content[1].text
-
-        vim.schedule(function()
-          -- Remove loading indicator
+          -- Display error in chat too
           if chat_state.bufnr and vim.api.nvim_buf_is_valid(chat_state.bufnr) then
             vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", true)
-            local line_count = vim.api.nvim_buf_line_count(chat_state.bufnr)
-            -- Remove last 2 lines (empty line + loading message)
-            vim.api.nvim_buf_set_lines(chat_state.bufnr, line_count - 2, line_count, false, {})
+            vim.api.nvim_buf_set_lines(chat_state.bufnr, -1, -1, false, {
+              "",
+              "❌ Error: " .. tostring(error),
+              ""
+            })
             vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
           end
 
-          -- Store response for potential code extraction
-          chat_state.last_response = assistant_message
-
-          -- Add to history and display
-          add_message("assistant", assistant_message)
-          display_message("assistant", assistant_message)
-
-          -- Check if response contains code changes
-          local code_blocks = extract_code_blocks(assistant_message)
-          if #code_blocks > 0 then
-            -- Add apply suggestion at the bottom of chat
-            vim.schedule(function()
-              if chat_state.bufnr and vim.api.nvim_buf_is_valid(chat_state.bufnr) then
-                vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", true)
-                vim.api.nvim_buf_set_lines(chat_state.bufnr, -1, -1, false, {
-                  "",
-                  "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                  "💡 Code suggestions detected! Press <leader>ap to apply changes",
-                  ""
-                })
-                vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
-
-                -- Scroll to bottom
-                if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
-                  local line_count = vim.api.nvim_buf_line_count(chat_state.bufnr)
-                  vim.api.nvim_win_set_cursor(chat_state.win, {line_count, 0})
-                end
-              end
-            end)
-          end
-
           chat_state.is_waiting = false
         end)
+        return
       end
-    end
-  })
-end
 
--- Handle input submission
-local function submit_input()
-  if not chat_state.input_bufnr or not vim.api.nvim_buf_is_valid(chat_state.input_bufnr) then
-    return
+      -- Finalize display (add bottom padding)
+      display.finalize()
+
+      -- Store response for potential code extraction
+      chat_state.last_response = full_text
+
+      -- Add to history
+      add_message("assistant", full_text)
+
+      -- Check if response contains code changes
+      local code_blocks = extract_code_blocks(full_text)
+      if #code_blocks > 0 then
+        vim.schedule(function()
+          if chat_state.bufnr and vim.api.nvim_buf_is_valid(chat_state.bufnr) then
+            vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", true)
+            vim.api.nvim_buf_set_lines(chat_state.bufnr, -1, -1, false, {
+              "",
+              "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+              "💡 Code suggestions detected! Press <leader>ap to apply changes",
+              ""
+            })
+            vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
+
+            -- Scroll to bottom
+            if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
+              local line_count = vim.api.nvim_buf_line_count(chat_state.bufnr)
+              vim.api.nvim_win_set_cursor(chat_state.win, {line_count, 0})
+            end
+          end
+        end)
+      end
+
+      chat_state.is_waiting = false
+    end,
+    {
+      system = chat_state.system_prompt,
+      max_tokens = 4096,
+      messages = chat_state.messages
+    }
+    )
+  end)
+
+  if not ok then
+    vim.notify("ERROR calling model:stream(): " .. tostring(err), vim.log.levels.ERROR)
+    chat_state.is_waiting = false
   end
-
-  -- Get input text
-  local lines = vim.api.nvim_buf_get_lines(chat_state.input_bufnr, 0, -1, false)
-  local input_text = table.concat(lines, "\n"):gsub("^%s*(.-)%s*$", "%1") -- trim
-
-  if input_text == "" or input_text == "> " then
-    return
-  end
-
-  -- Remove the "> " prompt if present
-  input_text = input_text:gsub("^> ", "")
-
-  -- Clear input buffer
-  vim.api.nvim_buf_set_lines(chat_state.input_bufnr, 0, -1, false, {"> "})
-
-  -- Move cursor to after prompt
-  if chat_state.input_win and vim.api.nvim_win_is_valid(chat_state.input_win) then
-    vim.api.nvim_win_set_cursor(chat_state.input_win, {1, 2})
-  end
-
-  -- Send message
-  send_chat_message(input_text)
 end
 
 -- Apply code changes from chat
@@ -819,10 +760,17 @@ M.open_chat = function()
     return
   end
 
+  -- Get model and set assistant name
+  local model = get_model()
+  if model and not chat_state.assistant_name then
+    chat_state.assistant_name = model:get_name()
+  end
+
   -- Gather project context on first open
   if not chat_state.system_prompt then
     local context = gather_context()
-    chat_state.system_prompt = string.format([[You are Claude, an AI assistant integrated into Neovim. You have access to the user's current project and file.
+    local assistant_name = chat_state.assistant_name or "Assistant"
+    chat_state.system_prompt = string.format([[You are %s, an AI assistant integrated into Neovim. You have access to the user's current project and file.
 
 IMPORTANT INSTRUCTIONS:
 - When the user asks you to modify code, ALWAYS provide the complete updated code in a code block
@@ -832,112 +780,98 @@ IMPORTANT INSTRUCTIONS:
 
 %s
 
-The user can apply your code suggestions directly from the chat using <leader>ap.]], context)
+The user can apply your code suggestions directly from the chat using <leader>ap.]], assistant_name, context)
   end
 
-  -- Calculate dimensions
-  local width = math.min(120, math.floor(vim.o.columns * 0.8))
-  local height = math.floor(vim.o.lines * 0.8)
-  local chat_height = height - 3 -- Leave room for input box
-  local input_height = 1
-
-  local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
-
-  -- Create chat display buffer
+  -- Create chat buffer if doesn't exist
   if not chat_state.bufnr or not vim.api.nvim_buf_is_valid(chat_state.bufnr) then
-    chat_state.bufnr = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_option(chat_state.bufnr, "buftype", "nofile")
-    vim.api.nvim_buf_set_option(chat_state.bufnr, "bufhidden", "hide")
-    vim.api.nvim_buf_set_option(chat_state.bufnr, "swapfile", false)
-    vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
-    vim.api.nvim_buf_set_option(chat_state.bufnr, "filetype", "markdown")
+    local ui = require("utils.ui")
+    local windows = ui.create_chat_window(
+      " " .. (chat_state.assistant_name or "Assistant") .. " Chat ",
+      nil, -- No initial message
+      chat_state.user_name,
+      chat_state.assistant_name,
+      {
+        on_send = function(text)
+          send_chat_message(text)
+        end
+      }
+    )
 
-    -- Initial message
-    vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", true)
-    vim.api.nvim_buf_set_lines(chat_state.bufnr, 0, -1, false, {
-      "Chat with Claude",
-      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-      "Type your message below and press <C-s> to send",
-      "Press 'q' or <Esc> to close this window",
-      "",
+    chat_state.bufnr = windows.chat_bufnr
+    chat_state.win = windows.chat_win
+    chat_state.input_bufnr = windows.input_bufnr
+    chat_state.input_win = windows.input_win
+  else
+    -- Reopen windows for existing buffer - manually create windows
+    local width = math.min(120, math.floor(vim.o.columns * 0.8))
+    local height = math.floor(vim.o.lines * 0.8)
+    local chat_height = height - 3
+    local input_height = 1
+
+    local row = math.floor((vim.o.lines - height) / 2)
+    local col = math.floor((vim.o.columns - width) / 2)
+
+    -- Create chat window with existing buffer
+    chat_state.win = vim.api.nvim_open_win(chat_state.bufnr, false, {
+      relative = "editor",
+      width = width,
+      height = chat_height,
+      row = row,
+      col = col,
+      style = "minimal",
+      border = "rounded",
+      title = " " .. (chat_state.assistant_name or "Assistant") .. " Chat ",
+      title_pos = "center",
     })
-    vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
+
+    vim.api.nvim_win_set_option(chat_state.win, "wrap", true)
+    vim.api.nvim_win_set_option(chat_state.win, "linebreak", true)
+
+    -- Create input window with existing buffer
+    chat_state.input_win = vim.api.nvim_open_win(chat_state.input_bufnr, true, {
+      relative = "editor",
+      width = width,
+      height = input_height,
+      row = row + chat_height + 1,
+      col = col,
+      style = "minimal",
+      border = "rounded",
+      title = " Your Message (Enter to send, Esc to close) ",
+      title_pos = "center",
+    })
+
+    -- Bind Enter for reopened window
+    vim.keymap.set({"i", "n"}, "<CR>", function()
+      local lines = vim.api.nvim_buf_get_lines(chat_state.input_bufnr, 0, -1, false)
+      local input_text = table.concat(lines, "\n"):gsub("^%s*(.-)%s*$", "%1")
+
+      if input_text == "" then
+        return
+      end
+
+      vim.api.nvim_buf_set_lines(chat_state.input_bufnr, 0, -1, false, {""})
+
+      vim.schedule(function()
+        if chat_state.input_win and vim.api.nvim_win_is_valid(chat_state.input_win) then
+          vim.api.nvim_set_current_win(chat_state.input_win)
+          vim.cmd("startinsert")
+        end
+      end)
+
+      send_chat_message(input_text)
+    end, { buffer = chat_state.input_bufnr, silent = true })
   end
 
-  -- Create chat window
-  chat_state.win = vim.api.nvim_open_win(chat_state.bufnr, false, {
-    relative = "editor",
-    width = width,
-    height = chat_height,
-    row = row,
-    col = col,
-    style = "minimal",
-    border = "rounded",
-    title = " Claude Chat ",
-    title_pos = "center",
-  })
-
-  vim.api.nvim_win_set_option(chat_state.win, "wrap", true)
-  vim.api.nvim_win_set_option(chat_state.win, "linebreak", true)
-
-  -- Create input buffer
-  chat_state.input_bufnr = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_option(chat_state.input_bufnr, "buftype", "nofile")
-  vim.api.nvim_buf_set_option(chat_state.input_bufnr, "bufhidden", "hide")
-  vim.api.nvim_buf_set_option(chat_state.input_bufnr, "swapfile", false)
-  vim.api.nvim_buf_set_lines(chat_state.input_bufnr, 0, -1, false, {"> "})
-
-  -- Create input window (below chat window)
-  chat_state.input_win = vim.api.nvim_open_win(chat_state.input_bufnr, true, {
-    relative = "editor",
-    width = width,
-    height = input_height,
-    row = row + chat_height + 1,
-    col = col,
-    style = "minimal",
-    border = "rounded",
-    title = " Your Message (Ctrl+S to send) ",
-    title_pos = "center",
-  })
-
-  -- Set cursor to end of prompt
-  vim.api.nvim_win_set_cursor(chat_state.input_win, {1, 2})
-  vim.cmd("startinsert!")
-
-  -- Keybindings for input buffer
-  vim.keymap.set("i", "<C-s>", submit_input, { buffer = chat_state.input_bufnr, silent = true })
-  vim.keymap.set("n", "<C-s>", submit_input, { buffer = chat_state.input_bufnr, silent = true })
-
-  -- Keybindings for chat buffer
-  vim.keymap.set("n", "q", function()
-    if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
-      vim.api.nvim_win_close(chat_state.win, true)
-    end
-    if chat_state.input_win and vim.api.nvim_win_is_valid(chat_state.input_win) then
-      vim.api.nvim_win_close(chat_state.input_win, true)
-    end
-  end, { buffer = chat_state.bufnr, silent = true })
-
-  vim.keymap.set("n", "<Esc>", function()
-    if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
-      vim.api.nvim_win_close(chat_state.win, true)
-    end
-    if chat_state.input_win and vim.api.nvim_win_is_valid(chat_state.input_win) then
-      vim.api.nvim_win_close(chat_state.input_win, true)
-    end
-  end, { buffer = chat_state.bufnr, silent = true })
-
-  -- Close both windows when input window is closed
-  vim.api.nvim_create_autocmd("WinClosed", {
-    buffer = chat_state.input_bufnr,
-    callback = function()
-      if chat_state.win and vim.api.nvim_win_is_valid(chat_state.win) then
-        vim.api.nvim_win_close(chat_state.win, true)
-      end
-    end,
-    once = true,
-  })
+  -- Setup close keybindings (Esc and q)
+  local ui = require("utils.ui")
+  ui.setup_chat_close_keys(
+    chat_state.win,
+    chat_state.input_win,
+    chat_state.bufnr,
+    chat_state.input_bufnr,
+    {"q"} -- Additional key 'q' for closing
+  )
 end
 
 -- Clear chat history
@@ -945,13 +879,7 @@ M.clear_chat = function()
   chat_state.messages = {}
   if chat_state.bufnr and vim.api.nvim_buf_is_valid(chat_state.bufnr) then
     vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", true)
-    vim.api.nvim_buf_set_lines(chat_state.bufnr, 0, -1, false, {
-      "Chat with Claude",
-      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-      "Type your message below and press <C-s> to send",
-      "Press 'q' or <Esc> to close this window",
-      "",
-    })
+    vim.api.nvim_buf_set_lines(chat_state.bufnr, 0, -1, false, {})
     vim.api.nvim_buf_set_option(chat_state.bufnr, "modifiable", false)
   end
   vim.notify("Chat history cleared", vim.log.levels.INFO)

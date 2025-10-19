@@ -19,6 +19,13 @@ keymap.bind("n", "<S-q>", function()
   vim.api.nvim_buf_delete(0, { force = false })
 end)
 
+-- Restart Neovim
+keymap.bind("n", "<leader>rr", function()
+  vim.cmd("wa") -- Save all buffers
+  vim.cmd("source $MYVIMRC") -- Reload config
+  vim.notify("Neovim config reloaded!", vim.log.levels.INFO)
+end)
+
 keymap.bind_for_all("<C-a>", editing.select_all)
 
 -- Copy with Ctrl+C in visual mode
