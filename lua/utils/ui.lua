@@ -68,9 +68,71 @@ local function create_select_window(width, height, title, content_lines, prompt)
   return content_buf, content_win, input_buf, input_win
 end
 
+-- Generic selection window with custom content
+-- @param title string: Window title
+-- @param content_lines table: Array of strings to display in content area
+-- @param prompt_text string: Prompt text for input (e.g., "> ")
+-- @param callback function(input): Called when user submits input
+-- @param default_value string: Optional default value for input
+-- @param width number: Optional window width (default 70)
+-- @param height number: Optional window height (default 15)
+M.selection_window = function(title, content_lines, prompt_text, callback, default_value, width, height)
+  width = width or 70
+  height = height or 15
+  prompt_text = prompt_text or "> "
+
+  local content_buf, content_win, input_buf, input_win =
+    create_select_window(width, height, title, content_lines, prompt_text)
+
+  -- Set default value if provided
+  if default_value then
+    vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, {default_value})
+  end
+
+  local cancelled = false
+  local submitted = false
+
+  -- Handle submission
+  local function submit()
+    if submitted then return end
+    submitted = true
+
+    -- Get the input (remove prompt prefix)
+    local lines = vim.api.nvim_buf_get_lines(input_buf, 0, -1, false)
+    local input = lines[1] or ""
+
+    -- Remove prompt from input
+    local prompt = vim.fn.prompt_getprompt(input_buf)
+    if input:sub(1, #prompt) == prompt then
+      input = input:sub(#prompt + 1)
+    end
+
+    -- Close windows
+    pcall(vim.api.nvim_win_close, input_win, true)
+    pcall(vim.api.nvim_win_close, content_win, true)
+
+    if not cancelled and callback then
+      vim.schedule(function()
+        callback(input)
+      end)
+    end
+  end
+
+  -- Keybindings
+  vim.keymap.set({"i", "n"}, "<CR>", submit, { buffer = input_buf, noremap = true, silent = true })
+
+  vim.keymap.set({"i", "n"}, "<Esc>", function()
+    cancelled = true
+    submitted = true
+    pcall(vim.api.nvim_win_close, input_win, true)
+    pcall(vim.api.nvim_win_close, content_win, true)
+  end, { buffer = input_buf, noremap = true, silent = true })
+end
+
 -- Input dialog
-M.input_window = function(title, prompt_text, callback, default_value)
-  local content_lines = {
+M.input_window = function(title, prompt_text, callback, default_value, content_lines)
+  -- Use provided content_lines or create default ones
+  content_lines = content_lines or {
     "",
     "",
     "",

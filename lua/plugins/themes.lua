@@ -30,6 +30,13 @@ return {
         builtin.colorscheme({ enable_preview = true })
       end, {})
       vim.keymap.set("n", "<leader>t", "<cmd>ColorschemePicker<cr>", { desc = "Pick colorscheme" })
+ 
+      vim.api.nvim_create_autocmd("ColorScheme", {
+        pattern = "*",
+        callback = function()
+          vim.api.nvim_set_hl(0, "debugPC", { bg = "#ff8800", fg = "#000000" })
+        end,
+      })
     end,
   },
 }

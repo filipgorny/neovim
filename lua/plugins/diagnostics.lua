@@ -119,7 +119,11 @@ return {
         }, {
             callback = function()
                 -- aktualizuj quickfix listę z błędami LSP
-                vim.diagnostic.setqflist({ open = false })
+                -- Only update if current buffer is valid
+                local bufnr = vim.api.nvim_get_current_buf()
+                if vim.api.nvim_buf_is_valid(bufnr) then
+                    vim.diagnostic.setqflist({ open = false })
+                end
             end,
         })
 

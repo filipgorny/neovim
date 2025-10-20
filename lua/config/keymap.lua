@@ -16,7 +16,19 @@ keymap.bind_for_all("<C-s>", function()
 end)
 
 keymap.bind("n", "<S-q>", function()
-  vim.api.nvim_buf_delete(0, { force = false })
+  local bufnr = vim.api.nvim_get_current_buf()
+  if vim.api.nvim_buf_is_valid(bufnr) then
+    -- Try to save the buffer first if it has unsaved changes
+    if vim.api.nvim_buf_get_option(bufnr, 'modified') then
+      local bufname = vim.api.nvim_buf_get_name(bufnr)
+      -- Only try to save if it's a real file (not a special buffer like DAP UI)
+      if bufname ~= "" and not bufname:match("^%[") then
+        pcall(vim.cmd, 'write')
+      end
+    end
+    -- Now delete the buffer (force=true to handle DAP buffers and other special cases)
+    vim.api.nvim_buf_delete(bufnr, { force = true })
+  end
 end)
 
 -- Restart Neovim
@@ -49,5 +61,27 @@ keymap.bind("n", "<leader>ax", llm.clear_chat)         -- Clear chat history
 
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
+
+-- Debugging keybindings (using function keys)
+local dap = require("dap")
+local dapui = require("dapui")
+
+keymap.bind("n", "<F5>", dap.continue)                           -- Start/Continue debugging
+keymap.bind("n", "<F6>", dap.terminate)                          -- Terminate debug session
+keymap.bind("n", "<F7>", dap.step_into)                          -- Step into
+keymap.bind("n", "<F8>", dap.step_over)                          -- Step over
+keymap.bind("n", "<F9>", dap.toggle_breakpoint)                  -- Toggle breakpoint
+keymap.bind("n", "<F10>", dap.step_out)                          -- Step out
+
+-- Additional debugging keybindings with leader
+keymap.bind("n", "<leader>db", dap.toggle_breakpoint)            -- Toggle breakpoint
+keymap.bind("n", "<leader>dB", function()                        -- Set conditional breakpoint
+  dap.set_breakpoint(vim.fn.input("Breakpoint condition: "))
+end)
+keymap.bind("n", "<leader>dr", dap.repl.toggle)                  -- Toggle REPL
+keymap.bind("n", "<leader>dl", dap.run_last)                     -- Run last debug configuration
+keymap.bind("n", "<leader>du", dapui.toggle)                     -- Toggle debug UI
+keymap.bind("n", "<leader>dh", require("dap.ui.widgets").hover)  -- Hover variable value
+keymap.bind("n", "<leader>dp", require("dap.ui.widgets").preview) -- Preview variable
 
 

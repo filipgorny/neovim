@@ -19,6 +19,18 @@ return {
         automatic_installation = true,
         automatic_enable = true, -- włącza lsp automatycznie po otwarciu pliku
       })
+
+      -- Also ensure debug adapters are installed
+      local registry = require("mason-registry")
+      local adapters_to_install = { "js-debug-adapter" }
+
+      for _, adapter in ipairs(adapters_to_install) do
+        local package = registry.get_package(adapter)
+        if not package:is_installed() then
+          vim.notify("Installing " .. adapter .. "...", vim.log.levels.INFO)
+          package:install()
+        end
+      end
     end,
   },
 

@@ -12,6 +12,7 @@ require("utils.editing").setup()
 require("system.session").setup()
 require("system.autocomplete").setup()
 require("utils.generator").setup()
+require("system.debugging").setup()
 
 -- Setup LLM with provider and API key from .env
 -- Choose your provider:

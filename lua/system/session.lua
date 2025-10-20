@@ -1,6 +1,7 @@
 local M = {};
 
 local session_dir = vim.fn.stdpath("data") .. "/sessions/"
+local breakpoints_dir = vim.fn.stdpath("data") .. "/breakpoints/"
 
 local function get_git_root()
   local git_root = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")[1]
@@ -18,7 +19,7 @@ local function get_git_branch()
   return nil
 end
 
-local function session_file()
+local function get_base_path_and_branch()
   -- Najpierw spróbuj znaleźć git root
   local base_path = get_git_root()
   local git_branch = nil
@@ -36,6 +37,12 @@ local function session_file()
   -- usuń końcowy slash
   base_path = base_path:gsub("/$", "")
 
+  return base_path, git_branch
+end
+
+local function get_safe_path()
+  local base_path, git_branch = get_base_path_and_branch()
+
   -- Zamień slashe i kropki na bezpieczne znaki
   local safe_path = base_path:gsub("[/\\]", "__"):gsub("%.", "_")
 
@@ -45,12 +52,135 @@ local function session_file()
     safe_path = safe_path .. "__branch__" .. safe_branch
   end
 
-  local name = session_dir .. safe_path .. ".vim"
+  return safe_path
+end
 
-  return name
+local function session_file()
+  return session_dir .. get_safe_path() .. ".vim"
+end
+
+local function breakpoints_file()
+  return breakpoints_dir .. get_safe_path() .. ".json"
+end
+
+local function save_breakpoints()
+  local ok, dap = pcall(require, "dap")
+  if not ok or not dap.breakpoints then
+    return -- DAP not loaded or breakpoints module not available
+  end
+
+  local debugging_ok, debugging = pcall(require, "system.debugging")
+  if not debugging_ok then
+    vim.notify("Failed to load debugging module", vim.log.levels.ERROR)
+    return
+  end
+
+  local breakpoints = dap.breakpoints.get()
+
+  if not breakpoints or vim.tbl_isempty(breakpoints) then
+    return -- No breakpoints to save
+  end
+
+  -- Clear existing breakpoints for this project
+  debugging.clear_breakpoints()
+
+  -- Save each breakpoint to database
+  local count = 0
+  for buf, buf_bps in pairs(breakpoints) do
+    local bufnr = tonumber(buf)
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+      local filepath = vim.api.nvim_buf_get_name(bufnr)
+      if filepath and filepath ~= "" then
+        for _, bp in ipairs(buf_bps) do
+          debugging.save_breakpoint(
+            filepath,
+            bp.line,
+            bp.condition,
+            bp.hitCondition,
+            bp.logMessage
+          )
+          count = count + 1
+        end
+      end
+    end
+  end
+end
+
+local function load_breakpoints()
+  local ok, dap = pcall(require, "dap")
+  if not ok then
+    return -- DAP not loaded yet
+  end
+
+  local debugging_ok, debugging = pcall(require, "system.debugging")
+  if not debugging_ok then
+    vim.notify("Failed to load debugging module", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Load breakpoints from database
+  local file_breakpoints = debugging.load_breakpoints()
+
+  if not file_breakpoints or vim.tbl_isempty(file_breakpoints) then
+    return -- No breakpoints to load
+  end
+
+  -- Defer breakpoint restoration to ensure buffers are fully loaded
+  vim.schedule(function()
+    -- Restore breakpoints for each file
+    for filepath, bps in pairs(file_breakpoints) do
+      -- Find or create buffer for this file
+      local bufnr = vim.fn.bufnr(filepath)
+
+      -- If buffer doesn't exist, create it
+      if bufnr == -1 then
+        bufnr = vim.fn.bufadd(filepath)
+        -- Load the buffer to ensure it's valid
+        vim.fn.bufload(bufnr)
+      end
+
+      -- Set breakpoints for this buffer
+      if bufnr and bufnr ~= -1 then
+        for _, bp in ipairs(bps) do
+          -- Create opts table from breakpoint data
+          local opts = {
+            condition = bp.condition,
+            hitCondition = bp.hitCondition,
+            logMessage = bp.logMessage,
+          }
+          -- Call dap.breakpoints.set with correct signature: (opts, bufnr, lnum)
+          pcall(dap.breakpoints.set, opts, bufnr, bp.line)
+        end
+      end
+    end
+  end)
 end
 
 local function save_session()
+  -- Close DAP UI windows before saving session
+  local dap_ok, dapui = pcall(require, "dapui")
+  if dap_ok then
+    dapui.close()
+  end
+
+  -- Close any remaining DAP buffers
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      local bufname = vim.api.nvim_buf_get_name(buf)
+      local filetype = vim.bo[buf].filetype or ""
+
+      -- Close DAP-related buffers based on filetype or buffer name
+      local is_dap_buffer = filetype:match("^dap") ~= nil or
+        bufname:match("DAP") ~= nil or
+        bufname:match("dap%-repl") ~= nil or
+        bufname:match("%[dap%-") ~= nil
+
+      if is_dap_buffer then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      end
+    end
+  end
+
   local session_file_path = session_file()
   local full_session_file_name = vim.fn.fnameescape(session_file_path)
 
@@ -61,6 +191,9 @@ local function save_session()
   if not ok then
     vim.notify("Failed to save session: " .. tostring(err), vim.log.levels.ERROR)
   end
+
+  -- Save breakpoints along with session
+  save_breakpoints()
 end
 
 -- Export save_session
@@ -86,6 +219,9 @@ local function load_session()
             end
           end
         end
+
+        -- Load breakpoints after buffers are loaded
+        load_breakpoints()
       end)
       return true
     end
@@ -112,6 +248,9 @@ M.load_session = function(force)
             end
           end
         end
+
+        -- Load breakpoints after buffers are loaded
+        load_breakpoints()
       end)
       return true
     end
@@ -127,17 +266,32 @@ end
 
 M.setup = function()
   vim.fn.mkdir(session_dir, "p")
+  vim.fn.mkdir(breakpoints_dir, "p")
 
   -- zapis sesji przy wyjściu
   local augroup = vim.api.nvim_create_augroup("SessionManager", { clear = true })
 
-  vim.api.nvim_create_autocmd({ "VimLeavePre", "QuitPre" }, {
+  vim.api.nvim_create_autocmd({ "VimLeavePre" }, {
     group = augroup,
     callback = function()
       -- zapis wszystkich zmienionych plików
       vim.cmd("silent! wa")
       -- zapis sesji z pełnym układem okien i zakładkami
-      save_session()
+      local ok, err = pcall(save_session)
+      if not ok then
+        -- Write error to file since we're exiting
+        local error_file = vim.fn.stdpath("data") .. "/session_error.log"
+        local f = io.open(error_file, "w")
+        if f then
+          f:write(os.date("%Y-%m-%d %H:%M:%S") .. "\n")
+          f:write("Error in save_session:\n")
+          f:write(tostring(err) .. "\n")
+          f:close()
+        end
+        vim.notify("Session save error (see " .. error_file .. "): " .. tostring(err), vim.log.levels.ERROR)
+        -- Wait a bit so user can see the error
+        vim.cmd("sleep 2")
+      end
     end,
   })
 
