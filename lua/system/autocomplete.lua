@@ -171,19 +171,61 @@ local function detect_empty_function()
     for _, pattern in ipairs(patterns) do
       local func_name, params = line_text:match(pattern)
       if func_name then
-        -- For Lua: just need the function line with no end yet
-        -- For JS/TS: just need the function line, opening brace optional
-        local class_info = detect_class_context(lines, current_line, filetype)
+        -- Check if there's already a function body (more than just empty lines or closing braces)
+        local has_body = false
+        local brace_count = 0
+        local found_opening_brace = line_text:match("{")
 
-        return {
-          name = func_name,
-          params = params,
-          line = current_line,
-          filetype = filetype,
-          class_name = class_info and class_info.name or nil,
-          class_line = class_info and class_info.line or nil,
-          just_declared = true, -- Flag to know we need to add end/}
-        }
+        if found_opening_brace then
+          brace_count = 1
+        end
+
+        -- Look ahead to see if there's any actual content
+        for i = current_line + 1, math.min(current_line + 20, #lines) do
+          local check_line = lines[i]
+          if check_line then
+            -- Count braces to track nesting
+            for _ in check_line:gmatch("{") do
+              brace_count = brace_count + 1
+            end
+            for _ in check_line:gmatch("}") do
+              brace_count = brace_count - 1
+            end
+
+            -- Check for Lua end
+            if filetype == "lua" and check_line:match("^%s*end%s*$") then
+              break
+            end
+
+            -- Check for closing brace at same level
+            if brace_count == 0 and check_line:match("}") then
+              break
+            end
+
+            -- If we find a non-empty, non-closing line, there's a body
+            if not check_line:match("^%s*$") and
+               not check_line:match("^%s*}%s*$") and
+               not check_line:match("^%s*end%s*$") then
+              has_body = true
+              break
+            end
+          end
+        end
+
+        -- Only show hint if there's no body yet
+        if not has_body then
+          local class_info = detect_class_context(lines, current_line, filetype)
+
+          return {
+            name = func_name,
+            params = params,
+            line = current_line,
+            filetype = filetype,
+            class_name = class_info and class_info.name or nil,
+            class_line = class_info and class_info.line or nil,
+            just_declared = true, -- Flag to know we need to add end/}
+          }
+        end
       end
     end
   end
@@ -202,7 +244,7 @@ local function show_hint(line)
 
   -- Add virtual text
   vim.api.nvim_buf_set_extmark(0, state.namespace, line - 1, 0, {
-    virt_text = {{"  💡 Press <C-g> to generate function body with Claude", "Comment"}},
+    virt_text = {{"  💡 Press <C-g> to generate function body with LLM", "Comment"}},
     virt_text_pos = "eol",
   })
 end
@@ -234,7 +276,7 @@ local function show_loading()
     col = col,
     style = "minimal",
     border = "rounded",
-    title = " Claude Code Generation ",
+    title = " LLM Code Generation ",
     title_pos = "center",
   })
 
@@ -270,7 +312,7 @@ local function show_loading()
       "",
       "  " .. frames[frame_idx],
       "",
-      "  Please wait while Claude generates the code...",
+      "  Please wait while LLM generates the code...",
       ""
     }
 
@@ -358,7 +400,7 @@ Generate the complete function body. Return ONLY the code that should go inside 
     func.class_name and "\n\nNote: This is a class method, so you can use 'this' to access class properties and other methods." or ""
   )
 
-  -- Call Claude
+  -- Call LLM
   llm.prompt(prompt, function(response)
     hide_loading()
 
@@ -445,7 +487,7 @@ end
 -- Setup
 M.setup = function()
   -- Create autocmd group
-  local group = vim.api.nvim_create_augroup("ClaudeAutocomplete", {clear = true})
+  local group = vim.api.nvim_create_augroup("LLMAutocomplete", {clear = true})
 
   -- Check on cursor move and text change
   vim.api.nvim_create_autocmd({"CursorMoved", "CursorMovedI", "TextChanged", "TextChangedI"}, {
@@ -462,7 +504,7 @@ M.setup = function()
     else
       vim.notify("No empty function detected at cursor", vim.log.levels.WARN)
     end
-  end, {noremap = true, silent = true, desc = "Generate function body with Claude"})
+  end, {noremap = true, silent = true, desc = "Generate function body with LLM"})
 end
 
 return M

@@ -14,7 +14,7 @@ M.icons = {
 -- Domyślne highlighty dla severity
 vim.cmd([[highlight VirtualError guifg=#F44747]])
 vim.cmd([[hi:Qarrright VirtualWarn  guifg=#FF8800]])
-vim.cmd([[highlight VirtualInfo  guifg=#4FC1FF]])
+ gv aim.cmd([[highlight VirtualInfo  guifg=#4FC1FF]])
 vim.cmd([[highlight VirtualHint  guifg=#B5CEA8]])
 
 M.severity_hl = {
