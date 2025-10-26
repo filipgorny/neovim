@@ -885,4 +885,119 @@ M.clear_chat = function()
   vim.notify("Chat history cleared", vim.log.levels.INFO)
 end
 
+-- Autocomplete: Stream completion suggestions for the given context
+M.suggest_completion = function(context, on_chunk, on_complete, on_error)
+  local model = get_model()
+
+  if not model or not model:is_configured() then
+    if on_error then
+      on_error("LLM model not configured")
+    end
+    return
+  end
+
+  -- Check if model supports streaming
+  if not model.stream then
+    if on_error then
+      on_error("Model does not support streaming")
+    end
+    return
+  end
+
+  -- Build completion prompt
+  local prompt = string.format([[Complete the following code. Provide ONLY the completion (the code that should come next), without any explanations, markdown formatting, or code blocks.
+
+File type: %s
+Code before cursor:
+%s
+
+Code after cursor:
+%s
+
+Provide only the completion text that should be inserted at the cursor position.]],
+    context.filetype or "text",
+    context.before_cursor or "",
+    context.after_cursor or ""
+  )
+
+  -- Stream the completion
+  local ok, err = pcall(function()
+    model:stream(
+      prompt,
+      -- on_chunk
+      function(chunk)
+        if on_chunk then
+          on_chunk(chunk)
+        end
+      end,
+      -- on_done
+      function(full_text, error)
+        if error then
+          if on_error then
+            on_error(error)
+          end
+          return
+        end
+
+        if on_complete then
+          on_complete(full_text)
+        end
+      end,
+      {
+        max_tokens = 500, -- Shorter for completions
+        temperature = 0.3, -- Lower temperature for more deterministic completions
+      }
+    )
+  end)
+
+  if not ok and on_error then
+    on_error(err)
+  end
+end
+
+-- Autocomplete: Get completion with basic prompt interface (non-streaming)
+M.get_completion = function(context, callback)
+  local model = get_model()
+
+  if not model or not model:is_configured() then
+    if callback then
+      callback(nil, "LLM model not configured")
+    end
+    return
+  end
+
+  -- Build completion prompt
+  local prompt = string.format([[Complete the following code. Provide ONLY the completion (the code that should come next), without any explanations, markdown formatting, or code blocks.
+
+File type: %s
+Code before cursor:
+%s
+
+Code after cursor:
+%s
+
+Provide only the completion text that should be inserted at the cursor position.]],
+    context.filetype or "text",
+    context.before_cursor or "",
+    context.after_cursor or ""
+  )
+
+  -- Use the model's prompt method
+  model:prompt(prompt, function(response, error)
+    if error then
+      if callback then
+        callback(nil, error)
+      end
+      return
+    end
+
+    if callback then
+      callback(response, nil)
+    end
+  end, {
+    max_tokens = 500,
+    temperature = 0.3,
+  })
+end
+
 return M

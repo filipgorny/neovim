@@ -36,7 +36,10 @@ local function init_breakpoints_table()
     { name = "hit_condition", type = "TEXT" },
     { name = "log_message", type = "TEXT" },
     { name = "created_at", type = "DATETIME DEFAULT CURRENT_TIMESTAMP" },
-    { name = "UNIQUE(project_path, git_branch, file_path, line_number)", type = "" },
+  }
+
+  local constraints = {
+    "UNIQUE(project_path, git_branch, file_path, line_number)"
   }
 
   local indexes = {
@@ -46,7 +49,7 @@ local function init_breakpoints_table()
     },
   }
 
-  local success, err = storage.create_table(TABLE_NAME, columns, indexes)
+  local success, err = storage.create_table(TABLE_NAME, columns, indexes, constraints)
   if not success then
     vim.notify("Failed to initialize breakpoints table: " .. tostring(err), vim.log.levels.ERROR)
     return false
@@ -157,6 +160,12 @@ end
 
 -- Setup function to initialize the module
 function M.setup()
+  -- Initialize storage database
+  if not storage.init() then
+    vim.notify("Failed to initialize storage database", vim.log.levels.ERROR)
+    return false
+  end
+
   -- Initialize breakpoints table
   if not init_breakpoints_table() then
     vim.notify("Failed to setup debugging session storage", vim.log.levels.ERROR)

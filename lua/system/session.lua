@@ -1,7 +1,10 @@
-local M = {};
+local M = {}
 
-local session_dir = vim.fn.stdpath("data") .. "/sessions/"
-local breakpoints_dir = vim.fn.stdpath("data") .. "/breakpoints/"
+local storage = require("utils.storage")
+
+-- Table names
+local SESSIONS_TABLE = "sessions"
+local SESSION_BUFFERS_TABLE = "session_buffers"
 
 local function get_git_root()
   local git_root = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")[1]
@@ -19,48 +22,147 @@ local function get_git_branch()
   return nil
 end
 
-local function get_base_path_and_branch()
-  -- Najpierw spróbuj znaleźć git root
-  local base_path = get_git_root()
+-- Get current project context (path and git branch)
+local function get_project_context()
+  local project_path = get_git_root()
   local git_branch = nil
 
-  -- Jeśli nie ma gita, użyj aktualnego katalogu
-  if not base_path then
-    base_path = vim.fn.getcwd()
+  if not project_path then
+    project_path = vim.fn.getcwd()
   else
-    -- Jeśli jesteśmy w git repo, pobierz branch
     git_branch = get_git_branch()
   end
 
-  -- Normalizuj ścieżkę
-  base_path = vim.fn.fnamemodify(base_path, ":p")
-  -- usuń końcowy slash
-  base_path = base_path:gsub("/$", "")
+  -- Normalize path
+  project_path = vim.fn.fnamemodify(project_path, ":p")
+  project_path = project_path:gsub("/$", "")
 
-  return base_path, git_branch
-end
-
-local function get_safe_path()
-  local base_path, git_branch = get_base_path_and_branch()
-
-  -- Zamień slashe i kropki na bezpieczne znaki
-  local safe_path = base_path:gsub("[/\\]", "__"):gsub("%.", "_")
-
-  -- Dodaj branch do nazwy pliku jeśli istnieje
-  if git_branch then
-    local safe_branch = git_branch:gsub("[/\\]", "_"):gsub("%.", "_")
-    safe_path = safe_path .. "__branch__" .. safe_branch
+  -- Default branch if not in git repo
+  if not git_branch or git_branch == "" then
+    git_branch = "main"
   end
 
-  return safe_path
+  return project_path, git_branch
 end
 
-local function session_file()
-  return session_dir .. get_safe_path() .. ".vim"
+-- Initialize sessions table
+local function init_sessions_table()
+  local columns = {
+    { name = "id", type = "INTEGER PRIMARY KEY AUTOINCREMENT" },
+    { name = "project_path", type = "TEXT NOT NULL" },
+    { name = "git_branch", type = "TEXT NOT NULL" },
+    { name = "cwd", type = "TEXT NOT NULL" },
+    { name = "updated_at", type = "DATETIME DEFAULT CURRENT_TIMESTAMP" },
+  }
+
+  local constraints = {
+    "UNIQUE(project_path, git_branch)",
+  }
+
+  local indexes = {
+    {
+      name = "idx_sessions_lookup",
+      columns = { "project_path", "git_branch" },
+    },
+  }
+
+  local success, err = storage.create_table(SESSIONS_TABLE, columns, indexes, constraints)
+  if not success then
+    vim.notify("Failed to initialize sessions table: " .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  return true
 end
 
-local function breakpoints_file()
-  return breakpoints_dir .. get_safe_path() .. ".json"
+-- Initialize session_buffers table
+local function init_session_buffers_table()
+  local columns = {
+    { name = "id", type = "INTEGER PRIMARY KEY AUTOINCREMENT" },
+    { name = "project_path", type = "TEXT NOT NULL" },
+    { name = "git_branch", type = "TEXT NOT NULL" },
+    { name = "file_path", type = "TEXT NOT NULL" },
+    { name = "last_accessed", type = "DATETIME DEFAULT CURRENT_TIMESTAMP" },
+  }
+
+  local constraints = {
+    "UNIQUE(project_path, git_branch, file_path)",
+  }
+
+  local indexes = {
+    {
+      name = "idx_session_buffers_lookup",
+      columns = { "project_path", "git_branch" },
+    },
+  }
+
+  local success, err = storage.create_table(SESSION_BUFFERS_TABLE, columns, indexes, constraints)
+  if not success then
+    vim.notify("Failed to initialize session_buffers table: " .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  return true
+end
+
+-- Add buffer to session when opened
+local function add_buffer_to_session(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  -- Only track real files
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local bufname = vim.api.nvim_buf_get_name(bufnr)
+  if not bufname or bufname == "" or bufname:match("^term://") then
+    return
+  end
+
+  -- Skip special buffers
+  local buftype = vim.bo[bufnr].buftype
+  if buftype ~= "" then
+    return
+  end
+
+  local project_path, git_branch = get_project_context()
+
+  local buffer_data = {
+    project_path = project_path,
+    git_branch = git_branch,
+    file_path = bufname,
+    last_accessed = os.date("%Y-%m-%d %H:%M:%S"),
+  }
+
+  local ok, err = storage.insert_or_replace(SESSION_BUFFERS_TABLE, buffer_data)
+  if not ok then
+    -- Silently fail - don't spam user with errors
+    return
+  end
+end
+
+-- Remove buffer from session when closed
+local function remove_buffer_from_session(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local bufname = vim.api.nvim_buf_get_name(bufnr)
+  if not bufname or bufname == "" then
+    return
+  end
+
+  local project_path, git_branch = get_project_context()
+
+  local conditions = {
+    project_path = project_path,
+    git_branch = git_branch,
+    file_path = bufname,
+  }
+
+  storage.delete(SESSION_BUFFERS_TABLE, conditions)
 end
 
 local function save_breakpoints()
@@ -156,43 +258,39 @@ local function load_breakpoints()
   end)
 end
 
+-- Sync all currently open buffers to session (mainly for manual save)
 local function save_session()
-  -- Close DAP UI windows before saving session
-  local dap_ok, dapui = pcall(require, "dapui")
-  if dap_ok then
-    dapui.close()
-  end
+  local project_path, git_branch = get_project_context()
+  local cwd = vim.fn.getcwd()
 
-  -- Close any remaining DAP buffers
+  -- Update session metadata
+  local session_data = {
+    project_path = project_path,
+    git_branch = git_branch,
+    cwd = cwd,
+    updated_at = os.date("%Y-%m-%d %H:%M:%S"),
+  }
+
+  storage.insert_or_replace(SESSIONS_TABLE, session_data)
+
+  -- Sync all currently open buffers
+  local buf_count = 0
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) then
+    if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_option(buf, "buflisted") then
       local bufname = vim.api.nvim_buf_get_name(buf)
-      local filetype = vim.bo[buf].filetype or ""
-
-      -- Close DAP-related buffers based on filetype or buffer name
-      local is_dap_buffer = filetype:match("^dap") ~= nil or
-        bufname:match("DAP") ~= nil or
-        bufname:match("dap%-repl") ~= nil or
-        bufname:match("%[dap%-") ~= nil
-
-      if is_dap_buffer then
-        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      if bufname and bufname ~= "" and not bufname:match("^term://") then
+        add_buffer_to_session(buf)
+        buf_count = buf_count + 1
       end
     end
   end
 
-  local session_file_path = session_file()
-  local full_session_file_name = vim.fn.fnameescape(session_file_path)
+  vim.notify(
+    string.format("Session synced: %d buffers (%s/%s)", buf_count, project_path, git_branch),
+    vim.log.levels.INFO
+  )
 
-  local ok, err = pcall(function()
-    vim.cmd("mksession! " .. full_session_file_name)
-  end)
-
-  if not ok then
-    vim.notify("Failed to save session: " .. tostring(err), vim.log.levels.ERROR)
-  end
-
-  -- Save breakpoints along with session
+  -- Save breakpoints
   save_breakpoints()
 end
 
@@ -203,28 +301,73 @@ vim.keymap.set("n", "<leader>S", save_session);
 
 local function load_session()
   if vim.fn.argc() == 0 then
-    local f = session_file()
-    if vim.fn.filereadable(f) == 1 then
-      vim.cmd("silent! source " .. vim.fn.fnameescape(f))
+    local project_path, git_branch = get_project_context()
 
-      -- Po załadowaniu sesji, odśwież LSP i podświetlanie składni dla wszystkich buforów
-      vim.schedule(function()
-        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-          if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_option(buf, "buflisted") then
-            local bufname = vim.api.nvim_buf_get_name(buf)
-            if bufname and bufname ~= "" then
-              -- Triggeruj BufRead i BufEnter żeby aktywować LSP i treesitter
-              vim.api.nvim_exec_autocmds("BufRead", { buffer = buf })
-              vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf })
-            end
+    -- Query buffers from database, ordered by last accessed
+    local columns = { "file_path", "last_accessed" }
+    local conditions = {
+      project_path = project_path,
+      git_branch = git_branch,
+    }
+    local order_by = { "last_accessed DESC" }
+
+    local rows = storage.select(SESSION_BUFFERS_TABLE, columns, conditions, order_by)
+
+    if not rows or #rows == 0 then
+      return false
+    end
+
+    -- Load session metadata to restore cwd
+    local session_meta = storage.select(SESSIONS_TABLE, { "cwd" }, conditions, {})
+    if session_meta and #session_meta > 0 and session_meta[1][1] then
+      local cwd = session_meta[1][1]
+      vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+    end
+
+    -- Defer buffer loading to ensure everything is initialized
+    vim.schedule(function()
+      -- Load all buffers (most recently accessed first)
+      for _, row in ipairs(rows) do
+        if #row >= 1 then
+          local file_path = row[1]
+
+          -- Open buffer if file exists
+          if vim.fn.filereadable(file_path) == 1 then
+            vim.cmd("badd " .. vim.fn.fnameescape(file_path))
           end
         end
+      end
 
-        -- Load breakpoints after buffers are loaded
-        load_breakpoints()
-      end)
-      return true
-    end
+      -- Open the most recently accessed file
+      if #rows > 0 and rows[1][1] then
+        local first_file = rows[1][1]
+        if vim.fn.filereadable(first_file) == 1 then
+          vim.cmd("edit " .. vim.fn.fnameescape(first_file))
+        end
+      end
+
+      -- Trigger LSP and treesitter for all buffers
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_option(buf, "buflisted") then
+          local bufname = vim.api.nvim_buf_get_name(buf)
+          if bufname and bufname ~= "" then
+            vim.api.nvim_exec_autocmds("BufRead", { buffer = buf })
+            vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf })
+          end
+        end
+      end
+
+      -- Notify about loaded session
+      vim.notify(
+        string.format("Session loaded: %d buffers (%s/%s)", #rows, project_path, git_branch),
+        vim.log.levels.INFO
+      )
+
+      -- Load breakpoints after buffers are loaded
+      load_breakpoints()
+    end)
+
+    return true
   end
   return false
 end
@@ -232,66 +375,194 @@ end
 -- Export load_session with option to force load even with args
 M.load_session = function(force)
   if force or vim.fn.argc() == 0 then
-    local f = session_file()
-    if vim.fn.filereadable(f) == 1 then
-      vim.cmd("silent! source " .. vim.fn.fnameescape(f))
+    local project_path, git_branch = get_project_context()
 
-      -- Po załadowaniu sesji, odśwież LSP i podświetlanie składni dla wszystkich buforów
-      vim.schedule(function()
-        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-          if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_option(buf, "buflisted") then
-            local bufname = vim.api.nvim_buf_get_name(buf)
-            if bufname and bufname ~= "" then
-              -- Triggeruj BufRead i BufEnter żeby aktywować LSP i treesitter
-              vim.api.nvim_exec_autocmds("BufRead", { buffer = buf })
-              vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf })
-            end
+    -- Query buffers from database, ordered by last accessed
+    local columns = { "file_path", "last_accessed" }
+    local conditions = {
+      project_path = project_path,
+      git_branch = git_branch,
+    }
+    local order_by = { "last_accessed DESC" }
+
+    local rows = storage.select(SESSION_BUFFERS_TABLE, columns, conditions, order_by)
+
+    if not rows or #rows == 0 then
+      vim.notify("No session found for this project", vim.log.levels.WARN)
+      return false
+    end
+
+    -- Load session metadata to restore cwd
+    local session_meta = storage.select(SESSIONS_TABLE, { "cwd" }, conditions, {})
+    if session_meta and #session_meta > 0 and session_meta[1][1] then
+      local cwd = session_meta[1][1]
+      vim.cmd("cd " .. vim.fn.fnameescape(cwd))
+    end
+
+    -- Defer buffer loading to ensure everything is initialized
+    vim.schedule(function()
+      -- Load all buffers (most recently accessed first)
+      for _, row in ipairs(rows) do
+        if #row >= 1 then
+          local file_path = row[1]
+
+          -- Open buffer if file exists
+          if vim.fn.filereadable(file_path) == 1 then
+            vim.cmd("badd " .. vim.fn.fnameescape(file_path))
           end
         end
+      end
 
-        -- Load breakpoints after buffers are loaded
-        load_breakpoints()
-      end)
-      return true
-    end
+      -- Open the most recently accessed file
+      if #rows > 0 and rows[1][1] then
+        local first_file = rows[1][1]
+        if vim.fn.filereadable(first_file) == 1 then
+          vim.cmd("edit " .. vim.fn.fnameescape(first_file))
+        end
+      end
+
+      -- Trigger LSP and treesitter for all buffers
+      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_option(buf, "buflisted") then
+          local bufname = vim.api.nvim_buf_get_name(buf)
+          if bufname and bufname ~= "" then
+            vim.api.nvim_exec_autocmds("BufRead", { buffer = buf })
+            vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf })
+          end
+        end
+      end
+
+      -- Notify about loaded session
+      vim.notify(
+        string.format("Session loaded: %d buffers (%s/%s)", #rows, project_path, git_branch),
+        vim.log.levels.INFO
+      )
+
+      -- Load breakpoints after buffers are loaded
+      load_breakpoints()
+    end)
+
+    return true
   end
   return false
 end
 
--- Check if session file exists
+-- Check if session exists
 M.session_exists = function()
-  local f = session_file()
-  return vim.fn.filereadable(f) == 1
+  local project_path, git_branch = get_project_context()
+  local rows = storage.select(SESSIONS_TABLE, { "id" }, {
+    project_path = project_path,
+    git_branch = git_branch,
+  }, {})
+  return rows and #rows > 0
+end
+
+-- Show session info
+M.session_info = function()
+  local project_path, git_branch = get_project_context()
+
+  print("Session Information:")
+  print("  Project path: " .. project_path)
+  print("  Git branch: " .. git_branch)
+
+  -- Check if session exists
+  local session_meta = storage.select(SESSIONS_TABLE, { "cwd", "updated_at" }, {
+    project_path = project_path,
+    git_branch = git_branch,
+  }, {})
+
+  if session_meta and #session_meta > 0 then
+    print("  Session exists: yes")
+    print("  Working directory: " .. (session_meta[1][1] or "unknown"))
+    print("  Last updated: " .. (session_meta[1][2] or "unknown"))
+
+    -- Count saved buffers
+    local saved_buffers = storage.select(SESSION_BUFFERS_TABLE, { "file_path" }, {
+      project_path = project_path,
+      git_branch = git_branch,
+    }, { "buffer_order" })
+
+    print("  Saved buffers: " .. #saved_buffers)
+    for i, row in ipairs(saved_buffers) do
+      local short_name = vim.fn.fnamemodify(row[1], ":~:.")
+      print("    " .. i .. ". " .. short_name)
+    end
+  else
+    print("  Session exists: no")
+  end
+
+  print("\nCurrent buffers:")
+  local buf_count = 0
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_option(buf, "buflisted") then
+      local bufname = vim.api.nvim_buf_get_name(buf)
+      if bufname and bufname ~= "" and not bufname:match("^term://") then
+        buf_count = buf_count + 1
+        local short_name = vim.fn.fnamemodify(bufname, ":~:.")
+        print("    " .. buf_count .. ". " .. short_name)
+      end
+    end
+  end
+
+  if buf_count == 0 then
+    print("    (no buffers)")
+  end
 end
 
 M.setup = function()
-  vim.fn.mkdir(session_dir, "p")
-  vim.fn.mkdir(breakpoints_dir, "p")
+  -- Initialize storage database
+  if not storage.init() then
+    vim.notify("Failed to initialize storage database", vim.log.levels.ERROR)
+    return false
+  end
 
-  -- zapis sesji przy wyjściu
+  -- Initialize sessions tables
+  if not init_sessions_table() then
+    vim.notify("Failed to initialize sessions table", vim.log.levels.ERROR)
+    return false
+  end
+
+  if not init_session_buffers_table() then
+    vim.notify("Failed to initialize session_buffers table", vim.log.levels.ERROR)
+    return false
+  end
+
+  -- Create user commands
+  vim.api.nvim_create_user_command("SessionInfo", M.session_info, {})
+  vim.api.nvim_create_user_command("SessionLoad", function()
+    M.load_session(true)
+  end, {})
+  vim.api.nvim_create_user_command("SessionSave", save_session, {})
+
+  -- Real-time session tracking
   local augroup = vim.api.nvim_create_augroup("SessionManager", { clear = true })
 
-  vim.api.nvim_create_autocmd({ "VimLeavePre" }, {
+  -- Track buffer opens
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
     group = augroup,
-    callback = function()
-      -- zapis wszystkich zmienionych plików
-      vim.cmd("silent! wa")
-      -- zapis sesji z pełnym układem okien i zakładkami
-      local ok, err = pcall(save_session)
-      if not ok then
-        -- Write error to file since we're exiting
-        local error_file = vim.fn.stdpath("data") .. "/session_error.log"
-        local f = io.open(error_file, "w")
-        if f then
-          f:write(os.date("%Y-%m-%d %H:%M:%S") .. "\n")
-          f:write("Error in save_session:\n")
-          f:write(tostring(err) .. "\n")
-          f:close()
-        end
-        vim.notify("Session save error (see " .. error_file .. "): " .. tostring(err), vim.log.levels.ERROR)
-        -- Wait a bit so user can see the error
-        vim.cmd("sleep 2")
-      end
+    callback = function(args)
+      -- Defer to avoid issues during startup
+      vim.schedule(function()
+        add_buffer_to_session(args.buf)
+      end)
+    end,
+  })
+
+  -- Track buffer closes
+  vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
+    group = augroup,
+    callback = function(args)
+      remove_buffer_from_session(args.buf)
+    end,
+  })
+
+  -- Update last_accessed timestamp when switching buffers
+  vim.api.nvim_create_autocmd({ "BufEnter" }, {
+    group = augroup,
+    callback = function(args)
+      vim.schedule(function()
+        add_buffer_to_session(args.buf)
+      end)
     end,
   })
 

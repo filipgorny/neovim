@@ -8,6 +8,7 @@ local keymap = require("utils.keymap")
 local llm = require("utils.llm")
 local git = require("utils.git")
 local generator = require("utils.generator")
+local navigation = require("utils.navigation")
 
 keymap.bind_for_all("<C-s>", function()
   file.save_file()
@@ -49,6 +50,12 @@ vim.keymap.set("n", "<S-[>", git.prev_hunk, { noremap = true, silent = true, des
 
 -- Git branch switching with session management
 keymap.bind("n", "<leader>gb", git.switch_branch) -- Switch git branch with auto-save/stash/session
+
+-- Edit history navigation (jump between edit locations across files)
+vim.keymap.set("n", "<M-h>", navigation.go_back, { noremap = true, silent = true, desc = "Go to previous edit location" })
+vim.keymap.set("n", "<M-l>", navigation.go_forward, { noremap = true, silent = true, desc = "Go to next edit location" })
+vim.keymap.set("n", "<leader>nh", navigation.show_history, { noremap = true, silent = true, desc = "Show edit history" })
+vim.keymap.set("n", "<leader>nc", navigation.clear_history, { noremap = true, silent = true, desc = "Clear edit history" })
 
 -- LLM/AI keybindings
 keymap.bind("n", "<leader>ar", llm.review_diff)        -- Review all git changes
