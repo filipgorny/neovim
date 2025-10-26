@@ -12,8 +12,8 @@ return {
         untracked    = { text = '┆' },
       },
       signcolumn = true,  -- Toggle with `:Gitsigns toggle_signs`
-      numhl      = false, -- Toggle with `:Gitsigns toggle_numhl`
-      linehl     = true,  -- Toggle with `:Gitsigns toggle_linehl` - THIS HIGHLIGHTS THE LINE BACKGROUND
+      numhl      = true,  -- Toggle with `:Gitsigns toggle_numhl` - THIS HIGHLIGHTS THE LINE NUMBER
+      linehl     = false, -- Toggle with `:Gitsigns toggle_linehl`
       word_diff  = false, -- Toggle with `:Gitsigns toggle_word_diff`
       watch_gitdir = {
         follow_files = true
@@ -100,36 +100,30 @@ return {
       return "#1e1e1e"
     end
 
-    -- Set custom highlight colors based on current theme
+    -- Set custom highlight colors for line numbers
     vim.schedule(function()
-      local bg_color = get_bg_color()
+      -- Added lines: green background with white text
+      vim.api.nvim_set_hl(0, 'GitSignsAddNr', { bg = '#00aa00', fg = '#ffffff' })
 
-      -- Make changed lines slightly lighter (add 15 to RGB values)
-      local change_bg = adjust_color(bg_color, 15)
+      -- Changed lines: yellow background with white text
+      vim.api.nvim_set_hl(0, 'GitSignsChangeNr', { bg = '#ddaa00', fg = '#ffffff' })
 
-      -- Make added lines even more lighter (add 25 to RGB values)
-      local add_bg = adjust_color(bg_color, 25)
-
-      -- Make deleted lines slightly lighter with red tint
-      local delete_bg = adjust_color(bg_color, 10)
-
-      vim.api.nvim_set_hl(0, 'GitSignsAddLn', { bg = add_bg })
-      vim.api.nvim_set_hl(0, 'GitSignsChangeLn', { bg = change_bg })
-      vim.api.nvim_set_hl(0, 'GitSignsDeleteLn', { bg = delete_bg })
+      -- Deleted lines: keep default or customize as needed
+      vim.api.nvim_set_hl(0, 'GitSignsDeleteNr', { bg = '#aa0000', fg = '#ffffff' })
     end)
 
     -- Update highlights when colorscheme changes
     vim.api.nvim_create_autocmd("ColorScheme", {
       callback = function()
         vim.schedule(function()
-          local bg_color = get_bg_color()
-          local change_bg = adjust_color(bg_color, 15)
-          local add_bg = adjust_color(bg_color, 25)
-          local delete_bg = adjust_color(bg_color, 10)
+          -- Added lines: green background with white text
+          vim.api.nvim_set_hl(0, 'GitSignsAddNr', { bg = '#00aa00', fg = '#ffffff' })
 
-          vim.api.nvim_set_hl(0, 'GitSignsAddLn', { bg = add_bg })
-          vim.api.nvim_set_hl(0, 'GitSignsChangeLn', { bg = change_bg })
-          vim.api.nvim_set_hl(0, 'GitSignsDeleteLn', { bg = delete_bg })
+          -- Changed lines: yellow background with white text
+          vim.api.nvim_set_hl(0, 'GitSignsChangeNr', { bg = '#ddaa00', fg = '#ffffff' })
+
+          -- Deleted lines: keep default or customize as needed
+          vim.api.nvim_set_hl(0, 'GitSignsDeleteNr', { bg = '#aa0000', fg = '#ffffff' })
         end)
       end
     })

@@ -34,6 +34,9 @@ local function parse_git_status()
   return entries
 end
 
+local dupa = function()
+  vim.dupa()
+end
 -- test test test
 
 -- Główny picker

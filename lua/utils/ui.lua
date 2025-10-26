@@ -931,4 +931,587 @@ M.setup_chat_close_keys = function(chat_win, input_win, chat_bufnr, input_bufnr,
   })
 end
 
+-- Create a floating window
+-- @param content string|table: Content to display (string or table of lines)
+-- @param opts table: Optional configuration
+--   - width: number (default 40)
+--   - height: number (default 10)
+--   - title: string (default "")
+--   - position: string ("center" or "bottom-right", default "center")
+--   - on_close: function
+-- @return table: { bufnr, win }
+M.create_floating_window = function(content, opts)
+  opts = opts or {}
+  local width = opts.width or 40
+  local height = opts.height or 10
+  local title = opts.title or ""
+  local position = opts.position or "center"
+
+  -- Convert content to lines
+  local lines = {}
+  if type(content) == "string" then
+    for line in content:gmatch("[^\n]+") do
+      table.insert(lines, line)
+    end
+  else
+    lines = content
+  end
+
+  -- Create buffer
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(bufnr, "swapfile", false)
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
+  vim.api.nvim_buf_set_option(bufnr, "filetype", "markdown")
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", false)
+
+  -- Calculate position based on option
+  local row, col
+  if position == "center" then
+    -- Center of screen
+    row = math.floor((vim.o.lines - height) / 2)
+    col = math.floor((vim.o.columns - width) / 2)
+  else
+    -- Bottom right corner
+    row = vim.o.lines - height - 3 -- 3 for cmdline and status
+    col = vim.o.columns - width - 2
+  end
+
+  -- Create window
+  local win = vim.api.nvim_open_win(bufnr, false, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = title ~= "" and (" " .. title .. " ") or nil,
+    title_pos = "center",
+    focusable = true,
+  })
+
+  -- Set window options
+  vim.api.nvim_win_set_option(win, "wrap", true)
+  vim.api.nvim_win_set_option(win, "linebreak", true)
+
+  -- Setup close keybindings
+  vim.keymap.set("n", "q", function()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+    if opts.on_close then
+      opts.on_close()
+    end
+  end, { buffer = bufnr, silent = true })
+
+  vim.keymap.set("n", "<Esc>", function()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+    if opts.on_close then
+      opts.on_close()
+    end
+  end, { buffer = bufnr, silent = true })
+
+  return {
+    bufnr = bufnr,
+    win = win,
+  }
+end
+
+-- Create a loading popup with animation
+-- Shows a loading spinner and message, and listens for completion events
+-- @param message string: Loading message to display
+-- @param event_name string: Event name to listen for completion
+-- @param opts table: Optional configuration
+--   - on_complete: function(data) - Called when event is received
+-- @return table: { bufnr, win, close = function }
+M.create_loading_popup = function(message, event_name, opts)
+  opts = opts or {}
+
+  -- Spinner frames (walking lines using Braille characters)
+  local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+  local current_frame = 1
+
+  -- Calculate window size (just enough for one line)
+  local width = math.max(35, #message + 6)
+  local height = 1
+
+  -- Calculate bottom-right position (higher up to avoid status line)
+  local row = vim.o.lines - height - 5 -- 5 to avoid covering status line
+  local col = vim.o.columns - width - 2
+
+  -- Create buffer
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(bufnr, "swapfile", false)
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", false)
+
+  -- Create window
+  local win = vim.api.nvim_open_win(bufnr, false, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = " Loading ",
+    title_pos = "center",
+    focusable = false,
+  })
+
+  local timer = nil
+  local is_closed = false
+
+  -- Function to update the spinner
+  local function update_spinner()
+    if is_closed or not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_win_is_valid(win) then
+      if timer then
+        timer:stop()
+        timer:close()
+      end
+      return
+    end
+
+    vim.schedule(function()
+      if is_closed or not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+      end
+
+      local spinner = spinner_frames[current_frame]
+      local display_lines = {
+        string.format(" %s  %s", spinner, message),
+      }
+
+      vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, display_lines)
+      vim.api.nvim_buf_set_option(bufnr, "modifiable", false)
+
+      current_frame = (current_frame % #spinner_frames) + 1
+    end)
+  end
+
+  -- Start animation timer
+  timer = vim.loop.new_timer()
+  timer:start(0, 100, vim.schedule_wrap(update_spinner))
+
+  -- Close function
+  local function close()
+    is_closed = true
+
+    if timer then
+      timer:stop()
+      timer:close()
+      timer = nil
+    end
+
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+  end
+
+  -- Listen for completion event
+  local events = require("system.events")
+  local listener_id = events.once(event_name, function(data)
+    close()
+
+    if opts.on_complete then
+      vim.schedule(function()
+        opts.on_complete(data)
+      end)
+    end
+  end)
+
+  return {
+    bufnr = bufnr,
+    win = win,
+    close = close,
+    listener_id = listener_id,
+  }
+end
+
+-- Create a split-view code review modal window
+-- @param review_data table: Array of file reviews with structure:
+--   { filename, summary, issues = { {line, description} } }
+-- @return table: { file_list_buf, file_list_win, content_buf, content_win, close }
+M.create_review_window = function(review_data)
+  if not review_data or #review_data == 0 then
+    vim.notify("No review data to display", vim.log.levels.WARN)
+    return nil
+  end
+
+  -- Window dimensions
+  local width = math.floor(vim.o.columns * 0.9)
+  local height = math.floor(vim.o.lines * 0.9)
+  local row = math.floor((vim.o.lines - height) / 2) - 1  -- One line higher
+  local col = math.floor((vim.o.columns - width) / 2)
+
+  -- Get normal buffer background color
+  local normal_bg = vim.api.nvim_get_hl(0, { name = "Normal" }).bg
+  local bg_color = normal_bg and string.format("#%06x", normal_bg) or nil
+
+  -- Calculate split widths (account for gap between windows)
+  local file_list_width = math.floor(width * 0.25)
+  local gap = 2  -- Gap between windows to ensure borders are visible
+  local content_width = width - file_list_width - gap
+
+  -- Create file list buffer
+  local file_list_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(file_list_buf, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(file_list_buf, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(file_list_buf, "swapfile", false)
+
+  -- Create content buffer
+  local content_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(content_buf, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(content_buf, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(content_buf, "swapfile", false)
+  -- Don't set filetype to avoid unwanted syntax highlighting (e.g., markdown highlighting underscores)
+
+  -- Create file list window (left side)
+  local file_list_win = vim.api.nvim_open_win(file_list_buf, false, {
+    relative = "editor",
+    width = file_list_width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = " Files ",
+    title_pos = "center",
+    focusable = true,
+  })
+
+  -- Create content window (right side)
+  local content_win = vim.api.nvim_open_win(content_buf, true, {
+    relative = "editor",
+    width = content_width,
+    height = height,
+    row = row,
+    col = col + file_list_width + gap,
+    style = "minimal",
+    border = "rounded",
+    title = " Review ",
+    title_pos = "center",
+    focusable = true,
+  })
+
+  -- Set window options
+  vim.api.nvim_win_set_option(content_win, "wrap", true)
+  vim.api.nvim_win_set_option(content_win, "linebreak", true)
+  vim.api.nvim_win_set_option(file_list_win, "cursorline", true)
+
+  -- Match window backgrounds to normal buffer background
+  if bg_color then
+    vim.api.nvim_win_set_option(content_win, "winhl", "Normal:Normal,FloatBorder:FloatBorder")
+    vim.api.nvim_win_set_option(file_list_win, "winhl", "Normal:Normal,FloatBorder:FloatBorder")
+  end
+
+  -- Create custom highlight groups
+  vim.api.nvim_set_hl(0, "ReviewIssueLine", { bg = "#3a3a00", fg = "#ffffff" })
+  vim.api.nvim_set_hl(0, "ReviewBugComment", { fg = "#ff4444", bold = true })  -- Red for bugs
+  vim.api.nvim_set_hl(0, "ReviewHintComment", { fg = "#ffaa00", bold = true }) -- Yellow for hints
+
+  -- Track current file selection
+  local current_file_idx = 1
+
+  -- Helper function to wrap text to fit within a given width
+  local function wrap_text(text, max_width, prefix)
+    local lines = {}
+    local current_line = ""
+
+    for word in text:gmatch("%S+") do
+      local test_line = current_line == "" and word or (current_line .. " " .. word)
+      if #test_line > max_width then
+        if current_line ~= "" then
+          table.insert(lines, current_line)
+          current_line = word
+        else
+          -- Single word is too long, just add it
+          table.insert(lines, word)
+          current_line = ""
+        end
+      else
+        current_line = test_line
+      end
+    end
+
+    if current_line ~= "" then
+      table.insert(lines, current_line)
+    end
+
+    -- Add prefix to all lines (if prefix is provided)
+    if prefix and prefix ~= "" then
+      for i, line in ipairs(lines) do
+        lines[i] = prefix .. line
+      end
+    end
+
+    return lines
+  end
+
+  -- Function to render file list
+  local function render_file_list()
+    local lines = {}
+    local line_highlights = {}
+
+    for i, file_data in ipairs(review_data) do
+      local filename = vim.fn.fnamemodify(file_data.filename, ":t")
+      local issue_count = #file_data.issues
+      local marker = (i == current_file_idx) and "▶ " or "  "
+      local line = string.format("%s%s (%d)", marker, filename, issue_count)
+      table.insert(lines, line)
+
+      -- Determine severity color
+      local has_bug = false
+      local has_hint = false
+      for _, issue in ipairs(file_data.issues) do
+        if issue.severity == "bug" then
+          has_bug = true
+          break
+        elseif issue.severity == "hint" then
+          has_hint = true
+        end
+      end
+
+      -- Store highlight info
+      if has_bug then
+        table.insert(line_highlights, { line = i, hl_group = "ReviewBugComment" })
+      elseif has_hint then
+        table.insert(line_highlights, { line = i, hl_group = "ReviewHintComment" })
+      end
+    end
+
+    vim.api.nvim_buf_set_option(file_list_buf, "modifiable", true)
+    vim.api.nvim_buf_set_lines(file_list_buf, 0, -1, false, lines)
+    vim.api.nvim_buf_set_option(file_list_buf, "modifiable", false)
+
+    -- Apply highlights to filenames
+    local ns_id = vim.api.nvim_create_namespace("file_list_highlights")
+    vim.api.nvim_buf_clear_namespace(file_list_buf, ns_id, 0, -1)
+    for _, hl in ipairs(line_highlights) do
+      vim.api.nvim_buf_add_highlight(
+        file_list_buf,
+        ns_id,
+        hl.hl_group,
+        hl.line - 1,
+        0,
+        -1
+      )
+    end
+
+    -- Set cursor position
+    if vim.api.nvim_win_is_valid(file_list_win) then
+      pcall(vim.api.nvim_win_set_cursor, file_list_win, {current_file_idx, 0})
+    end
+  end
+
+  -- Function to render file content with issues
+  local function render_file_content()
+    local file_data = review_data[current_file_idx]
+    if not file_data then return end
+
+    local lines = {}
+    local highlights = {}
+
+    -- Add summary section only if meaningful
+    local has_summary = file_data.summary and file_data.summary ~= ""
+    local header_line_count = 0
+
+    if has_summary then
+      table.insert(lines, file_data.summary)
+      table.insert(lines, string.rep("─", content_width))
+      header_line_count = #lines
+    end
+
+    -- Read actual file content
+    local file_path = file_data.filename
+    local file_lines = {}
+
+    if vim.fn.filereadable(file_path) == 1 then
+      file_lines = vim.fn.readfile(file_path)
+    else
+      file_lines = {"(File not found or not readable)"}
+    end
+
+    -- Create a map of line numbers to issues (with severity)
+    local issue_map = {}
+    for _, issue in ipairs(file_data.issues) do
+      if not issue_map[issue.line] then
+        issue_map[issue.line] = {}
+      end
+      table.insert(issue_map[issue.line], {
+        description = issue.description,
+        severity = issue.severity or "hint"
+      })
+    end
+
+    -- Display file content with highlights
+    local current_display_line = header_line_count
+    for line_num, line_content in ipairs(file_lines) do
+      current_display_line = current_display_line + 1
+
+      -- Add the code line
+      table.insert(lines, string.format("%4d │ %s", line_num, line_content))
+
+      -- If this line has issues, highlight it and add comments
+      if issue_map[line_num] then
+        table.insert(highlights, {
+          line = current_display_line,
+          hl_group = "ReviewIssueLine"
+        })
+
+        -- Add all comments for this line
+        for _, issue in ipairs(issue_map[line_num]) do
+          local icon = issue.severity == "bug" and "🐛" or "💡"
+
+          -- Split description into words for manual wrapping
+          local words = {}
+          for word in issue.description:gmatch("%S+") do
+            table.insert(words, word)
+          end
+
+          -- Build wrapped lines manually
+          local wrapped_lines = {}
+          local current_line = ""
+          local max_width = content_width - 15  -- Account for prefix and spacing
+
+          for _, word in ipairs(words) do
+            local test_line = current_line == "" and word or (current_line .. " " .. word)
+            if #test_line > max_width then
+              if current_line ~= "" then
+                table.insert(wrapped_lines, current_line)
+                current_line = word
+              else
+                table.insert(wrapped_lines, word)
+                current_line = ""
+              end
+            else
+              current_line = test_line
+            end
+          end
+
+          if current_line ~= "" then
+            table.insert(wrapped_lines, current_line)
+          end
+
+          -- Add wrapped lines with proper formatting
+          for i, text_line in ipairs(wrapped_lines) do
+            current_display_line = current_display_line + 1
+
+            if i == 1 then
+              -- First line with icon
+              table.insert(lines, string.format("     │ %s %s", icon, text_line))
+            else
+              -- Continuation lines without icon, aligned
+              table.insert(lines, string.format("     │    %s", text_line))
+            end
+
+            -- Add highlight for the comment line
+            table.insert(highlights, {
+              line = current_display_line,
+              hl_group = issue.severity == "bug" and "ReviewBugComment" or "ReviewHintComment"
+            })
+          end
+        end
+      end
+    end
+
+    -- Set content
+    vim.api.nvim_buf_set_option(content_buf, "modifiable", true)
+    vim.api.nvim_buf_set_lines(content_buf, 0, -1, false, lines)
+    vim.api.nvim_buf_set_option(content_buf, "modifiable", false)
+
+    -- Apply highlights
+    local ns_id = vim.api.nvim_create_namespace("review_highlights")
+    vim.api.nvim_buf_clear_namespace(content_buf, ns_id, 0, -1)
+
+    for _, hl in ipairs(highlights) do
+      vim.api.nvim_buf_add_highlight(
+        content_buf,
+        ns_id,
+        hl.hl_group,
+        hl.line - 1,
+        0,
+        -1
+      )
+    end
+
+    -- Scroll to top
+    if vim.api.nvim_win_is_valid(content_win) then
+      pcall(vim.api.nvim_win_set_cursor, content_win, {1, 0})
+    end
+  end
+
+  -- Function to navigate files
+  local function select_file(idx)
+    if idx < 1 or idx > #review_data then return end
+    current_file_idx = idx
+    render_file_list()
+    render_file_content()
+  end
+
+  -- Initial render
+  render_file_list()
+  render_file_content()
+
+  -- Close function
+  local function close()
+    if vim.api.nvim_win_is_valid(file_list_win) then
+      vim.api.nvim_win_close(file_list_win, true)
+    end
+    if vim.api.nvim_win_is_valid(content_win) then
+      vim.api.nvim_win_close(content_win, true)
+    end
+  end
+
+  -- Keybindings for both buffers
+  local function setup_keys(bufnr)
+    -- Close window
+    vim.keymap.set("n", "q", close, { buffer = bufnr, silent = true })
+    vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, silent = true })
+
+    -- Navigate files
+    vim.keymap.set("n", "j", function() select_file(current_file_idx + 1) end, { buffer = bufnr, silent = true })
+    vim.keymap.set("n", "k", function() select_file(current_file_idx - 1) end, { buffer = bufnr, silent = true })
+    vim.keymap.set("n", "<Down>", function() select_file(current_file_idx + 1) end, { buffer = bufnr, silent = true })
+    vim.keymap.set("n", "<Up>", function() select_file(current_file_idx - 1) end, { buffer = bufnr, silent = true })
+  end
+
+  setup_keys(file_list_buf)
+  setup_keys(content_buf)
+
+  -- Enable mouse support for file list
+  vim.api.nvim_buf_set_option(file_list_buf, "mouse", "a")
+  vim.api.nvim_win_set_option(file_list_win, "mouse", "a")
+
+  -- Handle mouse clicks on file list
+  vim.keymap.set("n", "<LeftMouse>", function()
+    -- Get mouse position
+    local mouse_pos = vim.fn.getmousepos()
+
+    -- Check if click was in file list window
+    if mouse_pos.winid == file_list_win then
+      -- Get the line number clicked
+      local line = mouse_pos.line
+      if line >= 1 and line <= #review_data then
+        select_file(line)
+      end
+    end
+  end, { buffer = file_list_buf, silent = true })
+
+  return {
+    file_list_buf = file_list_buf,
+    file_list_win = file_list_win,
+    content_buf = content_buf,
+    content_win = content_win,
+    close = close,
+  }
+end
+
 return M

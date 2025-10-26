@@ -209,6 +209,93 @@ local function show_modal(title, content, opts)
   end
 end
 
+-- Parse structured review response from Claude
+local function parse_review_response(response)
+  local files = {}
+  local current_file = nil
+  local requested_files = {}
+
+  for line in response:gmatch("[^\n]+") do
+    -- Match FILE: <filename>
+    local filename = line:match("^FILE:%s*(.+)$")
+    if filename then
+      current_file = {
+        filename = filename,
+        summary = "",
+        issues = {}
+      }
+      table.insert(files, current_file)
+
+    -- Match SUMMARY: <text>
+    elseif line:match("^SUMMARY:") and current_file then
+      current_file.summary = line:match("^SUMMARY:%s*(.+)$") or ""
+
+    -- Match BUG: <number> | <description>
+    elseif line:match("^BUG:") and current_file then
+      local line_num, description = line:match("^BUG:%s*(%d+)%s*|%s*(.+)$")
+      if line_num and description then
+        table.insert(current_file.issues, {
+          line = tonumber(line_num),
+          description = description,
+          severity = "bug"
+        })
+      end
+
+    -- Match HINT: <number> | <description>
+    elseif line:match("^HINT:") and current_file then
+      local line_num, description = line:match("^HINT:%s*(%d+)%s*|%s*(.+)$")
+      if line_num and description then
+        table.insert(current_file.issues, {
+          line = tonumber(line_num),
+          description = description,
+          severity = "hint"
+        })
+      end
+
+    -- Match NEED_FILE: <filepath>
+    elseif line:match("^NEED_FILE:") then
+      local file_path = line:match("^NEED_FILE:%s*(.+)$")
+      if file_path then
+        table.insert(requested_files, file_path)
+      end
+    end
+  end
+
+  return files, requested_files
+end
+
+-- Extract file paths from diff
+local function extract_files_from_diff(diff_text)
+  local files = {}
+  for line in diff_text:gmatch("[^\n]+") do
+    -- Match diff --git a/path b/path
+    local file_path = line:match("^diff %-%-git a/(.-) b/")
+    if file_path then
+      table.insert(files, file_path)
+    end
+  end
+  return files
+end
+
+-- Get full file context for review
+local function get_file_context(file_path)
+  if vim.fn.filereadable(file_path) ~= 1 then
+    return nil
+  end
+
+  local lines = vim.fn.readfile(file_path)
+  local content = table.concat(lines, "\n")
+
+  -- Get file type
+  local filetype = vim.filetype.match({ filename = file_path }) or "unknown"
+
+  return {
+    path = file_path,
+    content = content,
+    filetype = filetype
+  }
+end
+
 -- Review git diff using Claude
 M.review_diff = function()
   -- Get git diff
@@ -226,31 +313,178 @@ M.review_diff = function()
 
   local diff_text = table.concat(diff_output, "\n")
 
-  -- Show loading message
-  vim.notify("Reviewing changes with Claude...", vim.log.levels.INFO)
+  -- Extract files and get their full context
+  local changed_files = extract_files_from_diff(diff_text)
+  local file_contexts = {}
+
+  for _, file_path in ipairs(changed_files) do
+    local context = get_file_context(file_path)
+    if context then
+      table.insert(file_contexts, context)
+    end
+  end
+
+  -- Get UI and events modules
+  local ui = require("utils.ui")
+  local events = require("system.events")
+
+  -- Event name for this review
+  local review_event = "diff_review_complete"
+
+  -- Show loading popup
+  local loading = ui.create_loading_popup("Generating diff review...", review_event, {
+    on_complete = function(data)
+      -- Parse and show review in split-view window
+      if data and data.response then
+        local review_data, _ = parse_review_response(data.response)
+
+        if #review_data > 0 then
+          ui.create_review_window(review_data)
+        else
+          -- Fallback to simple window if parsing failed
+          vim.notify("Could not parse review response, showing raw output", vim.log.levels.WARN)
+          ui.create_floating_window(data.response, {
+            width = 80,
+            height = 30,
+            title = "Claude Code Review",
+          })
+        end
+      end
+    end
+  })
+
+  -- Build context section
+  local context_section = ""
+  if #file_contexts > 0 then
+    context_section = "\n\nFULL FILE CONTEXTS (use these to understand how functions work together):\n\n"
+    for _, ctx in ipairs(file_contexts) do
+      context_section = context_section .. string.format(
+        "FILE: %s (type: %s)\n```%s\n%s\n```\n\n",
+        ctx.path,
+        ctx.filetype,
+        ctx.filetype,
+        ctx.content
+      )
+    end
+  end
 
   -- Prepare prompt for Claude
   local prompt = string.format([[
-Please review the following git diff and provide:
+Please review the following git diff as a senior developer doing a code review.
 
-1. **Summary**: Brief overview of the changes
-2. **Code Quality**: Comments on code style, best practices, and maintainability
-3. **Potential Bugs**: Any bugs, edge cases, or issues you notice
-4. **Security Concerns**: Potential security vulnerabilities
-5. **Suggestions**: Improvements or optimizations
+IMPORTANT: I've included the FULL CONTENT of each changed file below. Use this context to:
+- Understand how functions interact with the rest of the code
+- Spot compatibility issues between variables and functions
+- Check if changes break existing functionality
+- Verify that the logic fits with the overall application flow
+- Look for missed edge cases based on how the code is used elsewhere
 
+If you need to see the content of related files (imports, dependencies, modules used by the changed code), you can request them using:
+NEED_FILE: <relative/path/to/file>
+
+For each file, provide:
+1. OPTIONAL summary - ONLY include if you have NEGATIVE feedback, concerns, or issues about code quality, design, or architecture. DO NOT include positive feedback or descriptions of what changed. If the changes are good/fine, omit the SUMMARY line entirely.
+2. Specific line-level issues categorized by severity
+
+Format your response EXACTLY as follows:
+
+FILE: <filename>
+SUMMARY: <ONLY include if you have NEGATIVE feedback/concerns - NEVER include positive feedback - OMIT entirely if changes are good>
+BUG: <line_number> | <description of bug, error, or security risk>
+HINT: <line_number> | <suggestion for improvement or code quality hint>
+NEED_FILE: <path/to/related/file> (optional - include if you need to see this file to complete review)
+---
+
+Use BUG for: actual bugs, potential errors, security vulnerabilities, critical issues
+Use HINT for: code quality improvements, style suggestions, best practices, optimizations
+
+CRITICAL: Each BUG or HINT must reference EXACTLY ONE line number. If an issue affects multiple lines, create SEPARATE entries for each line with specific feedback for that line. DO NOT combine multiple lines into a single comment.
+
+Example CORRECT format:
+BUG: 42 | Variable x is undefined at this point
+BUG: 45 | Using undefined variable x will cause runtime error
+
+Example WRONG format:
+BUG: 42,45 | Variables are used incorrectly on these lines
+
+IMPORTANT: SUMMARY should ONLY contain negative feedback or concerns. Never say "looks good" or describe what changed. If everything is fine, skip the SUMMARY entirely.
+
+Repeat for each file. Use "---" to separate files.
+%s
 Here's the diff:
 
 ```diff
 %s
 ```
 
-Please be concise but thorough. Format your response in markdown.
-]], diff_text)
+Be thorough and opinionated like a real code reviewer. Consider the full file context when reviewing.
+]], context_section, diff_text)
 
-  -- Send to Claude and show response in modal
+  -- Send to Claude
   M.prompt(prompt, function(response)
-    show_modal("Claude Code Review", response)
+    if not response then
+      -- Close loading on error
+      if loading then
+        loading.close()
+      end
+      vim.notify("Failed to get response from Claude", vim.log.levels.ERROR)
+      return
+    end
+
+    -- Parse response to check for requested files
+    local _, requested_files = parse_review_response(response)
+
+    if #requested_files > 0 then
+      -- Claude needs more files, fetch them and make follow-up request
+      vim.schedule(function()
+        vim.notify(string.format("Fetching %d requested files...", #requested_files), vim.log.levels.INFO)
+
+        local additional_context = "\n\nADDITIONAL REQUESTED FILES:\n\n"
+        for _, file_path in ipairs(requested_files) do
+          local ctx = get_file_context(file_path)
+          if ctx then
+            additional_context = additional_context .. string.format(
+              "FILE: %s (type: %s)\n```%s\n%s\n```\n\n",
+              ctx.path,
+              ctx.filetype,
+              ctx.filetype,
+              ctx.content
+            )
+          else
+            additional_context = additional_context .. string.format(
+              "FILE: %s - NOT FOUND OR NOT READABLE\n\n",
+              file_path
+            )
+          end
+        end
+
+        -- Make follow-up request with additional context
+        local followup_prompt = string.format([[
+Here are the additional files you requested:
+%s
+
+Now please provide your complete review in the same format:
+
+FILE: <filename>
+SUMMARY: <optional opinion>
+BUG: <line_number> | <description>
+HINT: <line_number> | <description>
+---
+]], additional_context)
+
+        M.prompt(followup_prompt, function(final_response)
+          if final_response then
+            events.emit(review_event, { response = final_response })
+          else
+            loading.close()
+            vim.notify("Failed to get follow-up response from Claude", vim.log.levels.ERROR)
+          end
+        end)
+      end)
+    else
+      -- No additional files needed, emit the response
+      events.emit(review_event, { response = response })
+    end
   end)
 end
 
