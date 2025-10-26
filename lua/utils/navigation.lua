@@ -365,7 +365,11 @@ function M.setup_tracking()
       local line = cursor[1]
       local col = cursor[2]
 
+      -- Save position for restoration
       save_buffer_position(filepath, line, col)
+
+      -- Also add to navigation history when switching tabs
+      add_to_history(filepath, line, col, bufnr)
     end,
   })
 
