@@ -71,14 +71,21 @@ return {
 
         -- run conform for each range
         for _, r in ipairs(ranges) do
-          conform.format({
-            async = true,
-            lsp_fallback = true,
-            range = {
-              start = { r[1], 0 },
-              ["end"] = { r[2], 0 },
-            },
-          })
+          -- Validate range: line numbers must be >= 1
+          local start_line = math.max(1, r[1])
+          local end_line = math.max(1, r[2])
+
+          -- Only format if we have a valid range
+          if start_line > 0 and end_line > 0 and start_line <= end_line then
+            conform.format({
+              async = true,
+              lsp_fallback = true,
+              range = {
+                start = { start_line, 0 },
+                ["end"] = { end_line, 0 },
+              },
+            })
+          end
         end
       end, {})
 
