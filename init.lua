@@ -24,10 +24,16 @@ require("utils.llm").setup({
 })
 -- Setup LLM-powered copilot
 require("utils.copilot").setup({
-  auto_trigger = true,
+  auto_trigger = false,
   trigger_key = "<C-Space>",
   accept_key = "<Tab>",
   dismiss_key = "<C-e>",
   debounce_ms = 300,
 })
+
+-- Create command to view errors in :messages
+-- Errors from code review and other operations are logged here without popups
+vim.api.nvim_create_user_command("Errors", function()
+  vim.cmd("messages")
+end, { desc = "Show all errors and messages (including code review errors)" })
 

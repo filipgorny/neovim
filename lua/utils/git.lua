@@ -34,11 +34,6 @@ local function parse_git_status()
   return entries
 end
 
-local dupa = function()
-  vim.dupa()
-end
--- test test test
-
 -- Główny picker
 M.review_changes = function()
   local entries = parse_git_status()
@@ -170,6 +165,35 @@ local function get_current_branch()
     return branch
   end
   return nil
+end
+
+-- Get main branch name (master or main)
+M.get_main_branch = function()
+  -- First try to get default branch from remote
+  local handle = io.popen("git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null")
+  if handle then
+    local output = handle:read("*l")
+    handle:close()
+    if output and output ~= "" then
+      local branch = output:match("refs/remotes/origin/(.+)")
+      if branch then
+        return branch
+      end
+    end
+  end
+
+  -- Fallback: check if main exists, otherwise use master
+  handle = io.popen("git rev-parse --verify main 2>/dev/null")
+  if handle then
+    local result = handle:read("*l")
+    handle:close()
+    if result and result ~= "" then
+      return "main"
+    end
+  end
+
+  -- Default to master
+  return "master"
 end
 
 -- Save all modified buffers
@@ -341,7 +365,8 @@ M.switch_branch = function()
         switch_handle:close()
 
         if switch_output:match("error:") or switch_output:match("fatal:") then
-          vim.notify(string.format("Git error: %s", switch_output), vm.log.levels.ERROR)
+          -- Log git errors to :messages without popup
+          vim.api.nvim_echo({{"[Git Error] " .. switch_output, "ErrorMsg"}}, true, {})
           return
         end
 
@@ -379,6 +404,177 @@ M.switch_branch = function()
       return true
     end,
   }):find()
+end
+
+-- Get list of files with merge conflicts
+M.get_conflicted_files = function()
+  local handle = io.popen("git diff --name-only --diff-filter=U 2>/dev/null")
+  if not handle then return {} end
+
+  local files = {}
+  for line in handle:lines() do
+    if line ~= "" then
+      table.insert(files, line)
+    end
+  end
+  handle:close()
+
+  return files
+end
+
+-- Get the three versions of a conflicted file
+-- Returns: { ours = string, theirs = string, merged = string, base_path = string }
+M.get_conflict_versions = function(filepath)
+  local result = {
+    ours = nil,      -- HEAD version (current branch)
+    theirs = nil,    -- Incoming version (branch being merged)
+    merged = nil,    -- Current file with conflict markers
+    base_path = filepath
+  }
+
+  -- Get HEAD version (ours)
+  local ours_handle = io.popen(string.format("git show :2:'%s' 2>/dev/null", filepath))
+  if ours_handle then
+    result.ours = ours_handle:read("*a")
+    ours_handle:close()
+  end
+
+  -- Get incoming version (theirs)
+  local theirs_handle = io.popen(string.format("git show :3:'%s' 2>/dev/null", filepath))
+  if theirs_handle then
+    result.theirs = theirs_handle:read("*a")
+    theirs_handle:close()
+  end
+
+  -- Get current file with conflict markers
+  if vim.fn.filereadable(filepath) == 1 then
+    result.merged = table.concat(vim.fn.readfile(filepath), "\n")
+  end
+
+  return result
+end
+
+-- Mark a file as resolved
+M.mark_resolved = function(filepath)
+  local handle = io.popen(string.format("git add '%s' 2>&1", filepath))
+  if not handle then
+    return false, "Failed to execute git add"
+  end
+
+  local output = handle:read("*a")
+  local success = handle:close()
+
+  if output and (output:match("error:") or output:match("fatal:")) then
+    return false, output
+  end
+
+  return true, nil
+end
+
+-- Get branch names involved in the conflict
+M.get_merge_branch_names = function()
+  local result = {
+    current = nil,
+    incoming = nil
+  }
+
+  -- Get current branch
+  local current_handle = io.popen("git rev-parse --abbrev-ref HEAD 2>/dev/null")
+  if current_handle then
+    result.current = current_handle:read("*l")
+    current_handle:close()
+  end
+
+  -- Try to get incoming branch from MERGE_HEAD
+  local merge_head_handle = io.popen("git rev-parse --abbrev-ref MERGE_HEAD 2>/dev/null")
+  if merge_head_handle then
+    result.incoming = merge_head_handle:read("*l")
+    merge_head_handle:close()
+  end
+
+  -- If MERGE_HEAD doesn't work, try to get it from .git/MERGE_MSG
+  if not result.incoming or result.incoming == "" then
+    local git_dir_handle = io.popen("git rev-parse --git-dir 2>/dev/null")
+    if git_dir_handle then
+      local git_dir = git_dir_handle:read("*l")
+      git_dir_handle:close()
+
+      if git_dir and vim.fn.filereadable(git_dir .. "/MERGE_MSG") == 1 then
+        local merge_msg = vim.fn.readfile(git_dir .. "/MERGE_MSG")[1]
+        if merge_msg then
+          local branch = merge_msg:match("Merge branch '([^']+)'")
+          if branch then
+            result.incoming = branch
+          end
+        end
+      end
+    end
+  end
+
+  return result
+end
+
+-- Open conflict resolution UI for current file or show picker
+M.resolve_conflicts = function()
+  local conflicted_files = M.get_conflicted_files()
+
+  if #conflicted_files == 0 then
+    vim.notify("No merge conflicts found", vim.log.levels.INFO)
+    return
+  end
+
+  -- If current file is conflicted, open it directly
+  local current_file = vim.api.nvim_buf_get_name(0)
+  local git_root_handle = io.popen("git rev-parse --show-toplevel 2>/dev/null")
+  local git_root = nil
+  if git_root_handle then
+    git_root = git_root_handle:read("*l")
+    git_root_handle:close()
+  end
+
+  if git_root and current_file:find(git_root, 1, true) == 1 then
+    local relative_path = current_file:sub(#git_root + 2)
+    for _, file in ipairs(conflicted_files) do
+      if file == relative_path then
+        -- Current file is conflicted, open resolver
+        local ui = require("utils.ui")
+        ui.open_conflict_resolver(file)
+        return
+      end
+    end
+  end
+
+  -- Otherwise, show picker
+  if #conflicted_files == 1 then
+    local ui = require("utils.ui")
+    ui.open_conflict_resolver(conflicted_files[1])
+  else
+    -- Show telescope picker for multiple files
+    pickers.new({}, {
+      prompt_title = string.format("Resolve Conflicts (%d files)", #conflicted_files),
+      finder = finders.new_table({
+        results = conflicted_files,
+        entry_maker = function(entry)
+          return {
+            value = entry,
+            display = "⚠️  " .. entry,
+            ordinal = entry,
+          }
+        end,
+      }),
+      sorter = conf.generic_sorter({}),
+      attach_mappings = function(prompt_bufnr, map)
+        actions.select_default:replace(function()
+          local selection = action_state.get_selected_entry()
+          actions.close(prompt_bufnr)
+
+          local ui = require("utils.ui")
+          ui.open_conflict_resolver(selection.value)
+        end)
+        return true
+      end,
+    }):find()
+  end
 end
 
 return M

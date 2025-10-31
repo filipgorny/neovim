@@ -51,6 +51,9 @@ vim.keymap.set("n", "<S-[>", git.prev_hunk, { noremap = true, silent = true, des
 -- Git branch switching with session management
 keymap.bind("n", "<leader>gb", git.switch_branch) -- Switch git branch with auto-save/stash/session
 
+-- Git conflict resolution
+keymap.bind("n", "<leader>gm", git.resolve_conflicts) -- Resolve merge conflicts
+
 -- Edit history navigation (jump between edit locations across files)
 vim.keymap.set("n", "<M-h>", navigation.go_back, { noremap = true, silent = true, desc = "Go to previous edit location" })
 vim.keymap.set("n", "<M-l>", navigation.go_forward, { noremap = true, silent = true, desc = "Go to next edit location" })

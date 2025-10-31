@@ -5,12 +5,12 @@ local config = {
   enabled = true,
   auto_trigger = false, -- Set to true to trigger on typing
   trigger_key = "<C-Space>", -- Manual trigger key
-  accept_key = "<Tab>", -- Key to accept suggestion
-  dismiss_key = "<C-e>", -- Key to dismiss suggestion
-  debounce_ms = 300, -- Debounce time for auto-trigger
-  max_context_lines = 50, -- Max lines of context before/after cursor
+  accept_key = "<CR>", -- Key to accept suggestion (Enter)
+  dismiss_key = "<Esc>", -- Key to dismiss suggestion (Esc)
+  debounce_ms = 150, -- Debounce time for auto-trigger (reduced for faster response)
+  max_context_lines = 30, -- Max lines of context before/after cursor (reduced for faster processing)
   cache_enabled = true,
-  cache_ttl_ms = 30000, -- Cache time-to-live: 30 seconds
+  cache_ttl_ms = 60000, -- Cache time-to-live: 60 seconds (increased for better caching)
 }
 
 -- State
@@ -75,21 +75,64 @@ function M.setup_keybindings()
     M.trigger_completion()
   end, { desc = "Trigger LLM completion", silent = true })
 
-  -- Accept suggestion
+  -- Accept suggestion with Enter
   vim.keymap.set("i", config.accept_key, function()
     if state.current_suggestion then
       M.accept_suggestion()
-      return ""
+      return "" -- Don't insert newline
     else
-      -- No suggestion, fallback to default Tab behavior
-      return vim.api.nvim_replace_termcodes("<Tab>", true, false, true)
+      -- No suggestion, fallback to default Enter behavior
+      return vim.api.nvim_replace_termcodes("<CR>", true, false, true)
     end
-  end, { expr = true, desc = "Accept LLM suggestion", silent = true, replace_keycodes = false })
+  end, { expr = true, desc = "Accept LLM suggestion or insert newline", silent = true, replace_keycodes = false })
 
-  -- Dismiss suggestion
+  -- Dismiss suggestion with Esc
   vim.keymap.set("i", config.dismiss_key, function()
-    M.clear_suggestion()
-  end, { desc = "Dismiss LLM suggestion", silent = true })
+    if state.current_suggestion then
+      M.clear_suggestion()
+      return "" -- Don't exit insert mode
+    else
+      -- No suggestion, fallback to default Esc behavior (exit insert mode)
+      return vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+    end
+  end, { expr = true, desc = "Dismiss LLM suggestion or exit insert mode", silent = true, replace_keycodes = false })
+end
+
+-- Check if current buffer is suitable for copilot
+local function is_valid_buffer()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local buftype = vim.api.nvim_buf_get_option(bufnr, "buftype")
+  local filetype = vim.api.nvim_buf_get_option(bufnr, "filetype")
+
+  -- Don't trigger in special buffers
+  local excluded_buftypes = {
+    "nofile",    -- Review windows, scratch buffers
+    "prompt",    -- Command prompts
+    "help",      -- Help buffers
+    "quickfix",  -- Quickfix/location lists
+    "terminal",  -- Terminal buffers
+  }
+
+  for _, excluded in ipairs(excluded_buftypes) do
+    if buftype == excluded then
+      return false
+    end
+  end
+
+  -- Don't trigger in certain filetypes
+  local excluded_filetypes = {
+    "TelescopePrompt",
+    "help",
+    "man",
+  }
+
+  for _, excluded in ipairs(excluded_filetypes) do
+    if filetype == excluded then
+      return false
+    end
+  end
+
+  return true
 end
 
 -- Setup auto-trigger on text changes
@@ -100,6 +143,20 @@ function M.setup_auto_trigger()
   vim.api.nvim_create_autocmd("TextChangedI", {
     group = group,
     callback = function()
+      -- Check if copilot is enabled and auto_trigger is on
+      if not config.enabled or not config.auto_trigger then
+        return
+      end
+
+      -- Check if buffer is valid for copilot
+      if not is_valid_buffer() then
+        return
+      end
+
+      -- Clear existing suggestion when typing new text
+      if state.current_suggestion then
+        M.clear_suggestion()
+      end
       M.debounced_trigger()
     end,
   })
@@ -120,6 +177,22 @@ function M.setup_auto_trigger()
       if state.current_suggestion and cursor_moved_from_position(state.context_position) then
         M.clear_suggestion()
       end
+    end,
+  })
+
+  -- Clear suggestion when switching buffers
+  vim.api.nvim_create_autocmd("BufLeave", {
+    group = group,
+    callback = function()
+      M.clear_suggestion()
+    end,
+  })
+
+  -- Clear suggestion when entering command mode
+  vim.api.nvim_create_autocmd("CmdlineEnter", {
+    group = group,
+    callback = function()
+      M.clear_suggestion()
     end,
   })
 end
@@ -280,7 +353,19 @@ function M.trigger_completion()
   local context = M.get_context()
 
   -- Check if context is too short (avoid triggering on empty lines)
-  if context.before_cursor:match("^%s*$") then
+  -- Don't trigger if current line is empty or only whitespace
+  local current_line = context.before_cursor:match("[^\n]*$") or ""
+  if current_line:match("^%s*$") or context.before_cursor == "" then
+    return
+  end
+
+  -- Don't trigger if we have less than 3 characters on the current line
+  if #current_line:gsub("%s", "") < 3 then
+    return
+  end
+
+  -- Don't trigger if already requesting (prevent multiple concurrent requests)
+  if state.is_requesting then
     return
   end
 
@@ -540,11 +625,11 @@ function M.clear_suggestion()
   state.current_suggestion = nil
   state.context_position = nil
 
-  local bufnr = vim.api.nvim_get_current_buf()
-
-  -- Clear all extmarks in our namespace
-  if state.namespace_id and vim.api.nvim_buf_is_valid(bufnr) then
-    vim.api.nvim_buf_clear_namespace(bufnr, state.namespace_id, 0, -1)
+  -- Clear in all buffers to ensure nothing is left behind
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(bufnr) and state.namespace_id then
+      pcall(vim.api.nvim_buf_clear_namespace, bufnr, state.namespace_id, 0, -1)
+    end
   end
 
   state.extmark_ids = {}

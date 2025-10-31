@@ -106,8 +106,24 @@ return {
             },
 
         })
-        
+
         vim.diagnostic.config({ virtual_text = false }) -- Disable default virtual text
+
+        -- Customize diagnostic highlight groups
+        -- White background with black text for diagnostic messages
+        vim.api.nvim_set_hl(0, 'TinyInlineDiagnosticVirtualTextError', { fg = '#000000', bg = '#ffffff' })
+        vim.api.nvim_set_hl(0, 'TinyInlineDiagnosticVirtualTextWarn', { fg = '#000000', bg = '#ffffff' })
+        vim.api.nvim_set_hl(0, 'TinyInlineDiagnosticVirtualTextInfo', { fg = '#000000', bg = '#ffffff' })
+        vim.api.nvim_set_hl(0, 'TinyInlineDiagnosticVirtualTextHint', { fg = '#000000', bg = '#ffffff' })
+
+        -- Yellow arrow
+        vim.api.nvim_set_hl(0, 'TinyInlineDiagnosticVirtualTextArrow', { fg = '#ffff00' })
+
+        -- Colored diagnostic icons/dots
+        vim.api.nvim_set_hl(0, 'TinyInlineInvDiagnosticVirtualTextError', { fg = '#ff0000', bg = '#ffffff' })  -- Red for errors
+        vim.api.nvim_set_hl(0, 'TinyInlineInvDiagnosticVirtualTextWarn', { fg = '#ff8800', bg = '#ffffff' })   -- Orange for warnings
+        vim.api.nvim_set_hl(0, 'TinyInlineInvDiagnosticVirtualTextInfo', { fg = '#000000', bg = '#ffffff' })   -- Black for info
+        vim.api.nvim_set_hl(0, 'TinyInlineInvDiagnosticVirtualTextHint', { fg = '#000000', bg = '#ffffff' })   -- Black for hint
         
         vim.api.nvim_create_autocmd({
             "VimEnter",      -- start Neovima

@@ -213,7 +213,7 @@ function M.select(table_name, columns, conditions, order_by)
 
   local rows, err = query_sql(sql, values)
   if err then
-    vim.notify("SQL query error: " .. tostring(err), vim.log.levels.ERROR)
+    -- Silently return empty result - error handling is done by caller
     return {}
   end
 
@@ -226,7 +226,7 @@ function M.init()
   -- Create a simple query to ensure the database file is created
   local result, err = exec_sql("SELECT 1;")
   if err then
-    vim.notify("Failed to initialize database: " .. tostring(err), vim.log.levels.ERROR)
+    -- Silently fail - error handling is done by caller
     return false
   end
   return true
