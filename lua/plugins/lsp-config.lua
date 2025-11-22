@@ -15,7 +15,7 @@ return {
     dependencies = { "mason.nvim" },
     config = function()
       require("mason-lspconfig").setup({
-        ensure_installed = { "ts_ls", "eslint", "lua_ls" },
+        ensure_installed = { "ts_ls", "eslint", "lua_ls", "gopls" },
         automatic_installation = true,
         automatic_enable = true, -- włącza lsp automatycznie po otwarciu pliku
       })
@@ -200,6 +200,32 @@ return {
         pattern = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
         callback = function()
           vim.lsp.enable("eslint")
+        end,
+      })
+
+      -- =========================
+      -- gopls (Go language server)
+      vim.lsp.config("gopls", {
+        cmd = { "gopls" },
+        filetypes = { "go", "gomod", "gowork", "gotmpl" },
+        root_markers = { "go.work", "go.mod", ".git" },
+        capabilities = cmp_capabilities,
+        on_attach = common_on_attach,
+        settings = {
+          gopls = {
+            analyses = {
+              unusedparams = true,
+            },
+            staticcheck = true,
+            gofumpt = true,
+          },
+        },
+      })
+
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "go",
+        callback = function()
+          vim.lsp.enable("gopls")
         end,
       })
 

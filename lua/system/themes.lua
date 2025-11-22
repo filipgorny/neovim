@@ -1,3 +1,6 @@
+-- Ustaw termguicolors PRZED załadowaniem jakiegokolwiek motywu
+vim.opt.termguicolors = true
+
 -- plik gdzie trzymamy nazwę motywu
 local state_file = vim.fn.stdpath("data") .. "/last_colorscheme"
 
