@@ -11,9 +11,10 @@ local generator = require("utils.generator")
 local navigation = require("utils.navigation")
 
 keymap.bind_for_all("<C-s>", function()
-  file.save_file()
+  -- Format first (synchronously), then save
   editing.format_added()
   editing.format_modifications()
+  file.save_file()
 end)
 
 keymap.bind("n", "<S-q>", function()

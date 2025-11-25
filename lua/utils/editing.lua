@@ -61,10 +61,6 @@ M.format_modifications = function()
   local modified_lines = {}
 
   for i = 1, #lines do
-    if snapshot[i] ~= nil then
-      vim.notify("Comparing " .. lines[i] .. " - " .. snapshot[i])
-    end
-
     if not string.is_blank(lines[i]) then
       if snapshot[i] == nil or snapshot[i] ~= lines[i] then
         table.insert(modified_lines, i)
@@ -104,10 +100,11 @@ M.format_modifications = function()
     end
 
     -- Only format if there's actual content (not just empty lines)
-    if start0 < end0 and has_content then
+    if start0 <= end0 and has_content then
       conform.format({
-        async = true,
+        async = false,  -- Synchronous to prevent race conditions
         lsp_fallback = true,
+        timeout_ms = 500,
         range = {
           start = { start0, 0 },
           ["end"] = { end0, 0 },

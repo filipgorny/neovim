@@ -12,6 +12,7 @@ return {
           css = { "prettier" },
           json = { "prettier" },
           html = { "prettier" },
+          yaml = { "prettier" },
           go = { "gofmt" },
         },
         format_on_save = false, -- we want manual control
@@ -78,8 +79,9 @@ return {
           -- Only format if we have a valid range
           if start_line > 0 and end_line > 0 and start_line <= end_line then
             conform.format({
-              async = true,
+              async = false,  -- Synchronous to prevent race conditions
               lsp_fallback = true,
+              timeout_ms = 500,
               range = {
                 start = { start_line, 0 },
                 ["end"] = { end_line, 0 },
