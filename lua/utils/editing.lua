@@ -7,7 +7,8 @@ M.clear_buffer = function()
 end
 
 M.format_added = function()
-  vim.api.nvim_command("FormatDiff")
+  -- This function is deprecated - use format_modifications instead
+  -- Keeping it for backwards compatibility but making it a no-op
 end
 
 M.select_all = function()
@@ -46,7 +47,14 @@ M.format_modifications = function()
   local conform = require("conform");
 
   if M.snapshot.filename ~= M.get_current_filename() then
-    vim.notify("Snapshot is not for the current file")
+    return
+  end
+
+  -- Check if there are any LSP errors - skip formatting if there are
+  local diagnostics = vim.diagnostic.get(0, { severity = vim.diagnostic.severity.ERROR })
+  if #diagnostics > 0 then
+    -- Silently skip formatting if there are syntax errors
+    M.update_snapshot()
     return
   end
 
@@ -69,9 +77,10 @@ M.format_modifications = function()
   end
 
   if #modified_lines == 0 then
-    vim.notify("No modified lines to format", vim.log.levels.INFO)
+    -- Silently return if no changes
     return
   end
+
   local ranges = {}
   local start_line = modified_lines[1]
   local prev = modified_lines[1]
@@ -101,7 +110,7 @@ M.format_modifications = function()
 
     -- Only format if there's actual content (not just empty lines)
     if start0 <= end0 and has_content then
-      conform.format({
+      pcall(conform.format, {
         async = false,  -- Synchronous to prevent race conditions
         lsp_fallback = true,
         timeout_ms = 500,
@@ -113,6 +122,7 @@ M.format_modifications = function()
     end
   end
 
+  -- Always update snapshot after formatting
   M.update_snapshot()
 end
 return M

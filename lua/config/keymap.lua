@@ -11,8 +11,7 @@ local generator = require("utils.generator")
 local navigation = require("utils.navigation")
 
 keymap.bind_for_all("<C-s>", function()
-  -- Format first (synchronously), then save
-  editing.format_added()
+  -- Format only modified lines (synchronously), then save
   editing.format_modifications()
   file.save_file()
 end)

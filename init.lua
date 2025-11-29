@@ -22,14 +22,8 @@ require("utils.llm").setup({
   model = require("utils.llm.providers.claude_plan"), -- Using plan to save API tokens
   -- api_key will be automatically loaded from .env file (only for claude API provider)
 })
--- Setup LLM-powered copilot
-require("utils.copilot").setup({
-  auto_trigger = false,
-  trigger_key = "<C-Space>",
-  accept_key = "<Tab>",
-  dismiss_key = "<C-e>",
-  debounce_ms = 300,
-})
+
+-- Copilot disabled - moved to deprecated/copilot.lua
 
 -- Create command to view errors in :messages
 -- Errors from code review and other operations are logged here without popups
