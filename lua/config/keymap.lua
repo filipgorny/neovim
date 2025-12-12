@@ -9,12 +9,16 @@ local llm = require("utils.llm")
 local git = require("utils.git")
 local generator = require("utils.generator")
 local navigation = require("utils.navigation")
+local configuration = require("system.configuration")
 
 keymap.bind_for_all("<C-s>", function()
   -- Format only modified lines (synchronously), then save
   editing.format_modifications()
   file.save_file()
 end)
+
+-- Reload configuration
+keymap.bind("n", "<leader>c", configuration.reload_config)
 
 keymap.bind("n", "<S-q>", function()
   local bufnr = vim.api.nvim_get_current_buf()

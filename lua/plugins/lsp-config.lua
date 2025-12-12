@@ -45,7 +45,99 @@ return {
       -- funkcje wspólne dla wszystkich lsp
       local function common_on_attach(client, bufnr)
         local opts = { noremap = true, silent = true, buffer = bufnr }
-        vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
+        
+        -- gd skacze bezpośrednio do pierwszej definicji bez pokazywania okna wyboru
+        vim.keymap.set("n", "gd", function()
+          local clients = vim.lsp.get_clients({bufnr = 0})
+          if #clients == 0 then
+            vim.notify("No LSP client attached", vim.log.levels.WARN)
+            return
+          end
+          
+          local params = vim.lsp.util.make_position_params(0, clients[1].offset_encoding)
+          vim.lsp.buf_request(0, 'textDocument/definition', params, function(err, result, ctx, config)
+            if err then
+              vim.notify("LSP Error: " .. vim.inspect(err), vim.log.levels.ERROR)
+              return
+            end
+            if not result or vim.tbl_isempty(result) then
+              vim.notify("No definition found", vim.log.levels.WARN)
+              return
+            end
+            
+            -- Handle both single result and array of results
+            local locations = vim.islist(result) and result or {result}
+            if #locations > 0 then
+              local loc = locations[1]
+              local uri = loc.uri or loc.targetUri
+              local range = loc.range or loc.targetRange or loc.targetSelectionRange
+              
+              if uri then
+                -- Get file path from URI
+                local filepath = vim.uri_to_fname(uri)
+                local current_buf = vim.api.nvim_get_current_buf()
+                local current_file = vim.api.nvim_buf_get_name(current_buf)
+                
+                -- Check if opening a different file
+                local is_new_file = (filepath ~= current_file)
+                
+                -- Open file in buffer
+                vim.cmd('edit ' .. vim.fn.fnameescape(filepath))
+                
+                -- If it's a new file, move it to position right after the previous buffer
+                -- (zaraz po prawej stronie poprzedniego taba)
+                if is_new_file then
+                  vim.defer_fn(function()
+                    local new_buf = vim.api.nvim_get_current_buf()
+                    
+                    -- Get all buffers in order
+                    local buffers = vim.fn.getbufinfo({buflisted = 1})
+                    local prev_buf_index = nil
+                    
+                    -- Find the previous buffer index
+                    for i, buf in ipairs(buffers) do
+                      if buf.bufnr == current_buf then
+                        prev_buf_index = i
+                        break
+                      end
+                    end
+                    
+                    if prev_buf_index then
+                      -- Count how many positions we need to move back
+                      local current_new_index = nil
+                      for i, buf in ipairs(buffers) do
+                        if buf.bufnr == new_buf then
+                          current_new_index = i
+                          break
+                        end
+                      end
+                      
+                      if current_new_index and current_new_index > prev_buf_index + 1 then
+                        -- Move left until we're right after previous buffer
+                        local moves = current_new_index - prev_buf_index - 1
+                        for i = 1, moves do
+                          pcall(vim.cmd, 'BufferLineMovePrev')
+                        end
+                      elseif current_new_index and current_new_index < prev_buf_index + 1 then
+                        -- Move right until we're right after previous buffer
+                        local moves = prev_buf_index + 1 - current_new_index
+                        for i = 1, moves do
+                          pcall(vim.cmd, 'BufferLineMoveNext')
+                        end
+                      end
+                    end
+                  end, 50)
+                end
+                
+                -- Set cursor position
+                if range and range.start then
+                  vim.api.nvim_win_set_cursor(0, {range.start.line + 1, range.start.character})
+                end
+              end
+            end
+          end)
+        end, opts)
+        
         vim.keymap.set("n", "gi", vim.lsp.buf.implementation, opts)
         vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
         vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
