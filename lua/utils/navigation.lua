@@ -268,21 +268,21 @@ local function add_to_history(filepath, line, col, bufnr)
     return
   end
 
-  -- Check if this location is similar to the most recent one in database
+  -- Check if this location is exactly the same as the most recent one in database
   local recent_columns = { "file_path", "line_number" }
   local recent_conditions = {
     project_path = state.project_path,
     git_branch = state.git_branch,
   }
-  local recent_rows = storage.select(NAV_HISTORY_TABLE, recent_columns, recent_conditions, { "timestamp DESC" })
+  local recent_rows = storage.select(NAV_HISTORY_TABLE, recent_columns, recent_conditions, { "timestamp DESC" }, 1)
 
-  -- Check if location is too similar to most recent
+  -- Check if location is exactly the same as most recent (remove duplicates)
   if recent_rows and #recent_rows > 0 and #recent_rows[1] >= 2 then
     local last_file = recent_rows[1][1]
     local last_line = tonumber(recent_rows[1][2])
 
-    if last_file == filepath and math.abs(last_line - line) <= config.deduplicate_distance then
-      return -- Too similar, skip
+    if last_file == filepath and last_line == line then
+      return -- Exact duplicate, skip
     end
   end
 
@@ -466,8 +466,8 @@ local function jump_to_location(location)
     switched_buffer = true
   end
 
-  -- Use schedule to ensure buffer is fully loaded before jumping
-  vim.schedule(function()
+  -- Jump to the location immediately (even if same file)
+  local function do_jump()
     -- Jump to the location (line is 1-indexed, col is 0-indexed)
     local ok = pcall(vim.api.nvim_win_set_cursor, 0, { location.line, location.col })
 
@@ -492,7 +492,14 @@ local function jump_to_location(location)
     vim.defer_fn(function()
       state.is_navigating = false
     end, 200)
-  end)
+  end
+
+  -- Use schedule only if we switched buffers
+  if switched_buffer then
+    vim.schedule(do_jump)
+  else
+    do_jump()
+  end
 
   return true
 end
@@ -571,14 +578,29 @@ function M.go_back()
     return
   end
 
+  -- Get current location before jumping
+  local current_file = vim.api.nvim_buf_get_name(0)
+  local cursor = vim.api.nvim_win_get_cursor(0)
+
   -- Jump to the location
   local location = history[state.current_index]
-  if location and jump_to_location(location) then
-    local filename = vim.fn.fnamemodify(location.file, ":t")
-    vim.notify(
-      string.format("← %s:%d (%d/%d)", filename, location.line, state.current_index, #history),
-      vim.log.levels.INFO
-    )
+  if location then
+    -- Check if location is same as current
+    if current_file == location.file and cursor[1] == location.line then
+      -- Delete this duplicate entry
+      storage.delete(NAV_HISTORY_TABLE, { id = location.id })
+      -- Try next location
+      M.go_back()
+      return
+    end
+
+    if jump_to_location(location) then
+      local filename = vim.fn.fnamemodify(location.file, ":t")
+      vim.notify(
+        string.format("← %s:%d (%d/%d)", filename, location.line, state.current_index, #history),
+        vim.log.levels.INFO
+      )
+    end
   end
 end
 
@@ -586,28 +608,66 @@ end
 function M.go_forward()
   local history = get_history()
 
-  -- Check if we can go forward
-  if state.current_index <= 0 then
-    vim.notify("At newest edit location", vim.log.levels.INFO)
+  if #history == 0 then
+    vim.notify("No edit history", vim.log.levels.INFO)
+    return
+  end
+
+  -- Check if we're at newest (index 0 or 1), wrap to oldest
+  if state.current_index <= 1 then
+    state.current_index = #history
+    local location = history[state.current_index]
+    if location then
+      -- Get current location before jumping
+      local current_file = vim.api.nvim_buf_get_name(0)
+      local cursor = vim.api.nvim_win_get_cursor(0)
+
+      -- Check if location is same as current
+      if current_file == location.file and cursor[1] == location.line then
+        -- Delete this duplicate entry
+        storage.delete(NAV_HISTORY_TABLE, { id = location.id })
+        -- Try next location
+        M.go_forward()
+        return
+      end
+
+      if jump_to_location(location) then
+        local filename = vim.fn.fnamemodify(location.file, ":t")
+        vim.notify(
+          string.format("→ %s:%d (%d/%d) [wrapped to oldest]", filename, location.line, state.current_index, #history),
+          vim.log.levels.INFO
+        )
+      end
+    end
     return
   end
 
   -- Move forward
   state.current_index = state.current_index - 1
 
-  if state.current_index == 0 then
-    vim.notify("At newest edit location", vim.log.levels.INFO)
-    return
-  end
+  -- Get current location before jumping
+  local current_file = vim.api.nvim_buf_get_name(0)
+  local cursor = vim.api.nvim_win_get_cursor(0)
 
   -- Jump to the location
   local location = history[state.current_index]
-  if location and jump_to_location(location) then
-    local filename = vim.fn.fnamemodify(location.file, ":t")
-    vim.notify(
-      string.format("→ %s:%d (%d/%d)", filename, location.line, state.current_index, #history),
-      vim.log.levels.INFO
-    )
+  if location then
+    -- Check if location is same as current
+    if current_file == location.file and cursor[1] == location.line then
+      -- Delete this duplicate entry
+      storage.delete(NAV_HISTORY_TABLE, { id = location.id })
+      -- Try next location
+      M.go_forward()
+      return
+    end
+
+    if jump_to_location(location) then
+      local filename = vim.fn.fnamemodify(location.file, ":t")
+      vim.notify(
+        string.format("→ %s:%d (%d/%d)", filename, location.line, state.current_index, #history),
+        vim.log.levels.INFO
+      )
+    end
   end
 end
 

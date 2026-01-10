@@ -36,7 +36,8 @@ M.update_snapshot = function()
 end
 
 M.setup = function()
-  vim.api.nvim_create_autocmd({ "BufNewFile", "BufReadPost", "BufEnter" }, {
+  -- Only update snapshot on file read, not on every buffer enter (performance)
+  vim.api.nvim_create_autocmd({ "BufNewFile", "BufReadPost" }, {
     callback = function()
       M.update_snapshot()
     end,
@@ -111,9 +112,9 @@ M.format_modifications = function()
     -- Only format if there's actual content (not just empty lines)
     if start0 <= end0 and has_content then
       pcall(conform.format, {
-        async = false,  -- Synchronous to prevent race conditions
+        async = true,  -- Async to prevent blocking during typing
         lsp_fallback = true,
-        timeout_ms = 500,
+        timeout_ms = 1000,
         range = {
           start = { start0, 0 },
           ["end"] = { end0, 0 },

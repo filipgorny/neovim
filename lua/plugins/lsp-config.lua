@@ -80,55 +80,12 @@ return {
                 
                 -- Check if opening a different file
                 local is_new_file = (filepath ~= current_file)
-                
-                -- Open file in buffer
-                vim.cmd('edit ' .. vim.fn.fnameescape(filepath))
-                
-                -- If it's a new file, move it to position right after the previous buffer
-                -- (zaraz po prawej stronie poprzedniego taba)
+
+                -- Open file in buffer only if it's a different file
                 if is_new_file then
-                  vim.defer_fn(function()
-                    local new_buf = vim.api.nvim_get_current_buf()
-                    
-                    -- Get all buffers in order
-                    local buffers = vim.fn.getbufinfo({buflisted = 1})
-                    local prev_buf_index = nil
-                    
-                    -- Find the previous buffer index
-                    for i, buf in ipairs(buffers) do
-                      if buf.bufnr == current_buf then
-                        prev_buf_index = i
-                        break
-                      end
-                    end
-                    
-                    if prev_buf_index then
-                      -- Count how many positions we need to move back
-                      local current_new_index = nil
-                      for i, buf in ipairs(buffers) do
-                        if buf.bufnr == new_buf then
-                          current_new_index = i
-                          break
-                        end
-                      end
-                      
-                      if current_new_index and current_new_index > prev_buf_index + 1 then
-                        -- Move left until we're right after previous buffer
-                        local moves = current_new_index - prev_buf_index - 1
-                        for i = 1, moves do
-                          pcall(vim.cmd, 'BufferLineMovePrev')
-                        end
-                      elseif current_new_index and current_new_index < prev_buf_index + 1 then
-                        -- Move right until we're right after previous buffer
-                        local moves = prev_buf_index + 1 - current_new_index
-                        for i = 1, moves do
-                          pcall(vim.cmd, 'BufferLineMoveNext')
-                        end
-                      end
-                    end
-                  end, 50)
+                  vim.cmd('edit ' .. vim.fn.fnameescape(filepath))
                 end
-                
+
                 -- Set cursor position
                 if range and range.start then
                   vim.api.nvim_win_set_cursor(0, {range.start.line + 1, range.start.character})
@@ -234,7 +191,7 @@ return {
 
       -- =========================
       -- eslint
-      vim.lsp.config("eslint", {
+       vim.lsp.config("eslint", {
         cmd = { "vscode-eslint-language-server", "--stdio" },
         filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
         root_markers = {
@@ -251,12 +208,8 @@ return {
             client.server_capabilities.documentFormattingProvider = true
           end
 
-          vim.api.nvim_create_autocmd("BufWritePre", {
-            buffer = bufnr,
-            callback = function()
-              format_changed_lines()
-            end,
-          })
+          -- Removed BufWritePre autocmd to prevent formatting lag
+          -- Use :Format command or conform.nvim manually instead
 
           common_on_attach(client, bufnr)
         end,

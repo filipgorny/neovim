@@ -27,6 +27,9 @@ local active_animations = {}
 
 -- Create highlight group for a specific color
 local function create_highlight(color)
+  if not color or type(color) ~= "string" then
+    return nil
+  end
   local hl_name = "AnimationBlink_" .. color:gsub("#", "")
 
   vim.api.nvim_set_hl(0, hl_name, {

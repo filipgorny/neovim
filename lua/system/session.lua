@@ -339,10 +339,22 @@ local function load_session()
       end
 
       -- Open the most recently accessed file
+      -- Store initial buffer to potentially delete later
+      local initial_buf = vim.api.nvim_get_current_buf()
+      local initial_buf_name = vim.api.nvim_buf_get_name(initial_buf)
+      local initial_buf_lines = vim.api.nvim_buf_get_lines(initial_buf, 0, -1, false)
+      local is_empty = initial_buf_name == "" and #initial_buf_lines == 1 and initial_buf_lines[1] == ""
       if #rows > 0 and rows[1][1] then
         local first_file = rows[1][1]
         if vim.fn.filereadable(first_file) == 1 then
           vim.cmd("edit " .. vim.fn.fnameescape(first_file))
+          
+          -- Delete the initial empty buffer if it still exists and is empty
+          if is_empty and vim.api.nvim_buf_is_valid(initial_buf) then
+            vim.schedule(function()
+              pcall(vim.cmd, "bdelete! " .. initial_buf)
+            end)
+          end
         end
       end
 
@@ -556,12 +568,19 @@ M.setup = function()
     end,
   })
 
-  -- Update last_accessed timestamp when switching buffers
+  -- Update last_accessed timestamp when switching buffers (with debounce)
+  local bufenter_timer = nil
   vim.api.nvim_create_autocmd({ "BufEnter" }, {
     group = augroup,
     callback = function(args)
-      vim.schedule(function()
-        add_buffer_to_session(args.buf)
+      -- Debounce to prevent excessive DB writes during rapid buffer switches
+      if bufenter_timer then
+        vim.fn.timer_stop(bufenter_timer)
+      end
+      bufenter_timer = vim.fn.timer_start(500, function()
+        vim.schedule(function()
+          add_buffer_to_session(args.buf)
+        end)
       end)
     end,
   })

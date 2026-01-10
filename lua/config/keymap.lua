@@ -10,6 +10,7 @@ local git = require("utils.git")
 local generator = require("utils.generator")
 local navigation = require("utils.navigation")
 local configuration = require("system.configuration")
+local buffer_history = require("utils.buffer_history")
 
 keymap.bind_for_all("<C-s>", function()
   -- Format only modified lines (synchronously), then save
@@ -59,8 +60,8 @@ keymap.bind("n", "<leader>gb", git.switch_branch) -- Switch git branch with auto
 keymap.bind("n", "<leader>gm", git.resolve_conflicts) -- Resolve merge conflicts
 
 -- Edit history navigation (jump between edit locations across files)
-vim.keymap.set("n", "<M-h>", navigation.go_back, { noremap = true, silent = true, desc = "Go to previous edit location" })
-vim.keymap.set("n", "<M-l>", navigation.go_forward, { noremap = true, silent = true, desc = "Go to next edit location" })
+vim.keymap.set("n", "<C-j>", navigation.go_back, { noremap = true, silent = true, desc = "Go to previous edit location" })
+vim.keymap.set("n", "<C-k>", navigation.go_forward, { noremap = true, silent = true, desc = "Go to next edit location" })
 vim.keymap.set("n", "<leader>nh", navigation.show_history, { noremap = true, silent = true, desc = "Show edit history" })
 vim.keymap.set("n", "<leader>nc", navigation.clear_history, { noremap = true, silent = true, desc = "Clear edit history" })
 

@@ -418,7 +418,13 @@ return {
         },
       })
 
-      vim.keymap.set("n", "<leader>e", "<Cmd>Neotree reveal<CR>")
+      vim.keymap.set("n", "<leader>e", function()
+        local ok, err = pcall(vim.cmd, "Neotree reveal")
+        if not ok then
+          -- Jeśli reveal nie działa (np. plik nie istnieje), otwórz Neotree bez reveal
+          vim.cmd("Neotree show")
+        end
+      end)
     end,
   },
 
