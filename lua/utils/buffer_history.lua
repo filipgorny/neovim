@@ -35,29 +35,26 @@ function M.go_prev()
   if #M.history == 0 then
     return
   end
-  
-  -- Znajdź poprzedni bufor w historii
+
   local current_buf = vim.api.nvim_get_current_buf()
   local current_pos = nil
-  
+
   for i, buf in ipairs(M.history) do
     if buf == current_buf then
       current_pos = i
       break
     end
   end
-  
+
   if not current_pos then
-    -- Aktualny bufor nie jest w historii, idź do ostatniego
     current_pos = #M.history + 1
   end
-  
-  -- Idź do poprzedniego (z wrap around)
+
   local prev_pos = current_pos - 1
   if prev_pos < 1 then
-    prev_pos = #M.history
+    return
   end
-  
+
   local bufnr = M.history[prev_pos]
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
     vim.api.nvim_set_current_buf(bufnr)

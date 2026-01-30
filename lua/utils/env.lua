@@ -5,20 +5,34 @@ local M = {}
 -- @param filepath string: Path to .env file (optional, defaults to .env in git root or cwd)
 -- @return table: Key-value pairs from .env file
 function M.read(filepath)
-  -- If no filepath provided, try to find .env in git root or current directory
+  -- If no filepath provided, try to find .env in multiple locations
   if not filepath then
-    -- Try git root first
+    local paths_to_try = {}
+
+    -- 1. Try nvim config directory first (for API keys etc.)
+    local nvim_config = vim.fn.stdpath("config")
+    table.insert(paths_to_try, nvim_config .. "/.env")
+
+    -- 2. Try git root
     local git_root = vim.fn.systemlist("git rev-parse --show-toplevel 2>/dev/null")[1]
     if vim.v.shell_error == 0 and git_root and git_root ~= "" then
-      filepath = git_root .. "/.env"
-    else
-      -- Fall back to current working directory
-      filepath = vim.fn.getcwd() .. "/.env"
+      table.insert(paths_to_try, git_root .. "/.env")
+    end
+
+    -- 3. Fall back to current working directory
+    table.insert(paths_to_try, vim.fn.getcwd() .. "/.env")
+
+    -- Find first existing file
+    for _, path in ipairs(paths_to_try) do
+      if vim.fn.filereadable(path) == 1 then
+        filepath = path
+        break
+      end
     end
   end
 
   -- Check if file exists
-  if vim.fn.filereadable(filepath) ~= 1 then
+  if not filepath or vim.fn.filereadable(filepath) ~= 1 then
     return {}
   end
 

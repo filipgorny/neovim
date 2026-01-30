@@ -2806,4 +2806,271 @@ M.open_conflict_resolver = function(filepath)
   }
 end
 
+-- Create a tooltip window above the cursor position
+-- @param content string|table: Content to display (string or table of lines)
+-- @param opts table: Optional configuration
+--   - max_width: number (default 60)
+--   - max_height: number (default 10)
+--   - title: string (optional)
+--   - sticky: boolean (default false) - if true, don't auto-close on cursor move
+--   - on_close: function (optional callback when closed)
+-- @return table: { bufnr, win, close }
+M.create_tooltip = function(content, opts)
+  opts = opts or {}
+  local max_width = opts.max_width or 60
+  local max_height = opts.max_height or 10
+  local title = opts.title or nil
+  local sticky = opts.sticky or false
+
+  -- Convert content to lines
+  local lines = {}
+  if type(content) == "string" then
+    for line in content:gmatch("[^\r\n]+") do
+      table.insert(lines, line)
+    end
+  else
+    lines = content
+  end
+
+  -- Handle empty content
+  if #lines == 0 then
+    lines = { "(no content)" }
+  end
+
+  -- Word wrap lines to max_width
+  local wrapped_lines = {}
+  for _, line in ipairs(lines) do
+    if #line <= max_width - 2 then
+      table.insert(wrapped_lines, " " .. line .. " ")
+    else
+      -- Wrap long lines
+      local pos = 1
+      while pos <= #line do
+        local chunk = line:sub(pos, pos + max_width - 3)
+        table.insert(wrapped_lines, " " .. chunk .. " ")
+        pos = pos + max_width - 2
+      end
+    end
+  end
+
+  -- Calculate actual dimensions
+  local width = 0
+  for _, line in ipairs(wrapped_lines) do
+    width = math.max(width, #line)
+  end
+  width = math.min(width, max_width)
+  width = math.max(width, 10) -- Minimum width
+
+  local height = math.min(#wrapped_lines, max_height)
+
+  -- Get cursor position (screen coordinates)
+  local cursor_pos = vim.api.nvim_win_get_cursor(0)
+  local cursor_row = cursor_pos[1]
+  local cursor_col = cursor_pos[2]
+
+  -- Convert to screen position
+  local screen_pos = vim.fn.screenpos(0, cursor_row, cursor_col + 1)
+  local screen_row = screen_pos.row
+  local screen_col = screen_pos.col
+
+  -- Position above cursor (if there's space), otherwise below
+  local row, col
+  if screen_row > height + 2 then
+    -- Above cursor
+    row = screen_row - height - 2
+  else
+    -- Below cursor
+    row = screen_row
+  end
+
+  -- Adjust column to keep window on screen
+  col = screen_col - 1
+  if col + width > vim.o.columns then
+    col = vim.o.columns - width - 1
+  end
+  if col < 0 then col = 0 end
+
+  -- Create buffer
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(bufnr, "swapfile", false)
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, wrapped_lines)
+  vim.api.nvim_buf_set_option(bufnr, "modifiable", false)
+
+  -- Create window
+  local win_opts = {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    focusable = true,
+    zindex = 100,
+  }
+
+  if title then
+    win_opts.title = " " .. title .. " "
+    win_opts.title_pos = "center"
+  end
+
+  local win = vim.api.nvim_open_win(bufnr, true, win_opts)
+
+  -- Set window options
+  vim.api.nvim_win_set_option(win, "wrap", true)
+  vim.api.nvim_win_set_option(win, "linebreak", true)
+
+  -- Close function
+  local is_closed = false
+  local function close()
+    if is_closed then return end
+    is_closed = true
+
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+
+    if opts.on_close then
+      vim.schedule(opts.on_close)
+    end
+  end
+
+  -- Setup close keybindings
+  vim.keymap.set("n", "q", close, { buffer = bufnr, silent = true })
+  vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, silent = true })
+
+  -- Close on cursor move only if not sticky
+  if not sticky then
+    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufLeave" }, {
+      buffer = bufnr,
+      callback = close,
+      once = true,
+    })
+  end
+
+  return {
+    bufnr = bufnr,
+    win = win,
+    close = close,
+  }
+end
+
+-- Create a loading tooltip (with spinner animation)
+-- @param message string: Loading message to display
+-- @param opts table: Optional configuration (same as create_tooltip)
+-- @return table: { bufnr, win, close, update_message }
+M.create_loading_tooltip = function(message, opts)
+  opts = opts or {}
+
+  local spinner_frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+  local current_frame = 1
+  local current_message = message or "Loading..."
+
+  -- Get cursor position
+  local cursor_pos = vim.api.nvim_win_get_cursor(0)
+  local cursor_row = cursor_pos[1]
+  local cursor_col = cursor_pos[2]
+
+  local screen_pos = vim.fn.screenpos(0, cursor_row, cursor_col + 1)
+  local screen_row = screen_pos.row
+  local screen_col = screen_pos.col
+
+  -- Calculate position (above cursor if space, else below)
+  local width = math.max(#current_message + 6, 20)
+  local height = 1
+  local row = screen_row > 3 and (screen_row - 3) or screen_row
+  local col = screen_col - 1
+  if col + width > vim.o.columns then
+    col = vim.o.columns - width - 1
+  end
+  if col < 0 then col = 0 end
+
+  -- Create buffer
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(bufnr, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(bufnr, "swapfile", false)
+
+  -- Create window
+  local win = vim.api.nvim_open_win(bufnr, false, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    focusable = false,
+    zindex = 100,
+  })
+
+  local timer = nil
+  local is_closed = false
+
+  -- Update spinner
+  local function update_spinner()
+    if is_closed or not vim.api.nvim_buf_is_valid(bufnr) then
+      if timer then
+        timer:stop()
+        timer:close()
+      end
+      return
+    end
+
+    vim.schedule(function()
+      if is_closed or not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+      end
+
+      local spinner = spinner_frames[current_frame]
+      local display_line = string.format(" %s %s ", spinner, current_message)
+
+      vim.api.nvim_buf_set_option(bufnr, "modifiable", true)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { display_line })
+      vim.api.nvim_buf_set_option(bufnr, "modifiable", false)
+
+      current_frame = (current_frame % #spinner_frames) + 1
+    end)
+  end
+
+  -- Start animation
+  timer = vim.loop.new_timer()
+  timer:start(0, 100, vim.schedule_wrap(update_spinner))
+
+  -- Close function
+  local function close()
+    if is_closed then return end
+    is_closed = true
+
+    if timer then
+      timer:stop()
+      timer:close()
+      timer = nil
+    end
+
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+
+    if opts.on_close then
+      vim.schedule(opts.on_close)
+    end
+  end
+
+  -- Update message function
+  local function update_message(new_message)
+    current_message = new_message
+  end
+
+  return {
+    bufnr = bufnr,
+    win = win,
+    close = close,
+    update_message = update_message,
+  }
+end
+
 return M

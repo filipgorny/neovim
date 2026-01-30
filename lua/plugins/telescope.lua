@@ -35,6 +35,17 @@ return {
         {
             '<leader>h',
             function()
+                local file = vim.fn.expand("%")
+                if file == "" then
+                    vim.notify("No file open", vim.log.levels.WARN)
+                    return
+                end
+                -- Check if file has git history
+                local result = vim.fn.system('git log -1 --format=%H -- "' .. file .. '" 2>/dev/null')
+                if vim.v.shell_error ~= 0 or result == "" then
+                    vim.notify("No git history for this file", vim.log.levels.WARN)
+                    return
+                end
                 require('telescope').extensions.git_file_history.git_file_history()
             end,
             desc = 'Git file history'

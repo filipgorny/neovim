@@ -41,6 +41,52 @@ return {
     event = { "bufreadpre", "bufnewfile" },
     config = function()
       local cmp_capabilities = require("cmp_nvim_lsp").default_capabilities()
+      local signature_state = require("utils.signature_state")
+
+      if not vim.g.__lsp_signature_handler_wrapped then
+        local original_signature_handler = vim.lsp.handlers["textDocument/signatureHelp"]
+          or vim.lsp.handlers.signature_help
+
+        vim.lsp.handlers["textDocument/signatureHelp"] = function(err, result, ctx, config)
+          if not err then
+            local bufnr = ctx and ctx.bufnr or vim.api.nvim_get_current_buf()
+            signature_state.update_from_signature(bufnr, result)
+          end
+
+          if original_signature_handler then
+            return original_signature_handler(err, result, ctx, config)
+          end
+        end
+
+        vim.g.__lsp_signature_handler_wrapped = true
+      end
+
+      local signature_triggers = { ["("] = true, [","] = true }
+
+      local function setup_signature_autocmd(bufnr)
+        local group = vim.api.nvim_create_augroup("LspSignatureOnType" .. bufnr, { clear = true })
+        vim.api.nvim_create_autocmd("InsertCharPre", {
+          group = group,
+          buffer = bufnr,
+          callback = function(event)
+            if not signature_triggers[event.char or ""] then
+              return
+            end
+
+            local clients = vim.lsp.get_clients({ bufnr = event.buf })
+            for _, active_client in ipairs(clients) do
+              if active_client.server_capabilities.signatureHelpProvider then
+                vim.schedule(function()
+                  if vim.api.nvim_get_current_buf() == event.buf then
+                    pcall(vim.lsp.buf.signature_help)
+                  end
+                end)
+                break
+              end
+            end
+          end,
+        })
+      end
 
       -- funkcje wspólne dla wszystkich lsp
       local function common_on_attach(client, bufnr)
@@ -96,7 +142,9 @@ return {
         end, opts)
         
         vim.keymap.set("n", "gi", vim.lsp.buf.implementation, opts)
-        vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
+        vim.keymap.set("n", "gr", function()
+          require('telescope.builtin').lsp_references()
+        end, { noremap = true, silent = true, buffer = bufnr, desc = "Find all usages (Telescope)" })
         vim.keymap.set("n", "K", vim.lsp.buf.hover, opts)
         vim.keymap.set("n", "<leader>rn", vim.lsp.buf.rename, opts)
         vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, opts)
@@ -104,7 +152,20 @@ return {
         vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, opts)
         vim.keymap.set("n", "]d", vim.diagnostic.goto_next, opts)
         vim.keymap.set("i", "<c-h>", vim.lsp.buf.signature_help, opts)
+
+        if client.server_capabilities.signatureHelpProvider and not vim.b[bufnr].lsp_signature_on_type then
+          setup_signature_autocmd(bufnr)
+          vim.b[bufnr].lsp_signature_on_type = true
+        end
       end
+
+      local signature_cleanup_group = vim.api.nvim_create_augroup("LspSignatureStateCleanup", { clear = true })
+      vim.api.nvim_create_autocmd({ "InsertLeave", "BufLeave", "LspDetach" }, {
+        group = signature_cleanup_group,
+        callback = function(event)
+          signature_state.clear(event.buf)
+        end,
+      })
 
       ----------------------------------------------------------
       -- 🔧 pomocnicze funkcje do formatowania tylko zmienionych linii
@@ -187,6 +248,18 @@ return {
         capabilities = cmp_capabilities,
         on_attach = common_on_attach,
         init_options = { hostinfo = "neovim" },
+        settings = {
+          typescript = {
+            preferences = {
+              importModuleSpecifier = "non-relative",
+            },
+          },
+          javascript = {
+            preferences = {
+              importModuleSpecifier = "non-relative",
+            },
+          },
+        },
       })
 
       -- =========================
@@ -283,4 +356,3 @@ return {
   },
 
 }
-

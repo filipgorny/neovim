@@ -6,11 +6,13 @@ local file = require("utils.file")
 local editing = require("utils.editing")
 local keymap = require("utils.keymap")
 local llm = require("utils.llm")
+local assist = require("utils.assist")
 local git = require("utils.git")
 local generator = require("utils.generator")
 local navigation = require("utils.navigation")
 local configuration = require("system.configuration")
 local buffer_history = require("utils.buffer_history")
+local file_browsing = require("utils.file_browsing")
 
 keymap.bind_for_all("<C-s>", function()
   -- Format only modified lines (synchronously), then save
@@ -73,6 +75,7 @@ keymap.bind("v", "<leader>aa", llm.ask_about_selection) -- Ask about selected co
 keymap.bind("n", "<leader>ai", llm.open_chat)          -- Open interactive chat with Claude
 keymap.bind("n", "<leader>ap", llm.apply_chat_changes) -- Apply code changes from chat
 keymap.bind("n", "<leader>ax", llm.clear_chat)         -- Clear chat history
+keymap.bind("n", "<leader>i", assist.show_symbol_info)  -- Get AI info about symbol under cursor
 
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
@@ -99,4 +102,11 @@ keymap.bind("n", "<leader>du", dapui.toggle)                     -- Toggle debug
 keymap.bind("n", "<leader>dh", require("dap.ui.widgets").hover)  -- Hover variable value
 keymap.bind("n", "<leader>dp", require("dap.ui.widgets").preview) -- Preview variable
 
+-- File browsing
+keymap.bind("n", "<leader>l", file_browsing.find_files_by_mtime) -- Find files by modification time
 
+-- Buffers navigation
+keymap.bind("n", "<M-h>", buffer_history.go_prev)
+
+-- Exit editor
+keymap.bind("n", "<C-M-q>", ":exit <CR>");

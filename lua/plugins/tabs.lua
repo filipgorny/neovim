@@ -6,8 +6,8 @@ return {
     { "<leader>bP", "<Cmd>BufferLineGroupClose ungrouped<CR>", desc = "Delete Non-Pinned Buffers" },
     { "<leader>br", "<Cmd>BufferLineCloseRight<CR>", desc = "Delete Buffers to the Right" },
     { "<leader>bl", "<Cmd>BufferLineCloseLeft<CR>", desc = "Delete Buffers to the Left" },
-    { "<M-j>",      "<cmd>BufferLineCyclePrev<cr>", desc = "Previous tab" },
-    { "<M-k>",      "<cmd>BufferLineCycleNext<cr>", desc = "Next tab" },
+    { "<M-k>",      "<cmd>BufferLineCyclePrev<cr>", desc = "Previous tab" },
+    { "<M-j>",      "<cmd>BufferLineCycleNext<cr>", desc = "Next tab" },
   },
   opts = {
     options = {
