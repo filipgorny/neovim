@@ -10,6 +10,7 @@ require("system.themes")
 
 require("utils.editing").setup()
 require("system.session").setup()
+require("utils.process").setup()
 require("utils.generator").setup()
 require("system.debugging").setup()
 require("utils.navigation").setup()

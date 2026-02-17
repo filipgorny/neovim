@@ -159,6 +159,16 @@ function M.insert_or_replace(table_name, data)
   return true
 end
 
+-- Delete all rows from a table
+function M.delete_all(table_name)
+  local sql = string.format("DELETE FROM %s", table_name)
+  local result, err = exec_sql(sql)
+  if err then
+    return false, err
+  end
+  return true
+end
+
 -- Delete rows matching conditions
 function M.delete(table_name, conditions)
   local where_parts = {}

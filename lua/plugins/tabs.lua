@@ -6,8 +6,8 @@ return {
     { "<leader>bP", "<Cmd>BufferLineGroupClose ungrouped<CR>", desc = "Delete Non-Pinned Buffers" },
     { "<leader>br", "<Cmd>BufferLineCloseRight<CR>", desc = "Delete Buffers to the Right" },
     { "<leader>bl", "<Cmd>BufferLineCloseLeft<CR>", desc = "Delete Buffers to the Left" },
-    { "<M-k>", function() require("utils.buffer_history").go_prev() end, desc = "Previous tab (history)" },
-    { "<M-j>", function() require("utils.buffer_history").go_next() end, desc = "Next tab (history)" },
+    { "<M-k>", "<cmd>BufferLineCyclePrev<CR>", desc = "Previous tab (left)" },
+    { "<M-j>", "<cmd>BufferLineCycleNext<CR>", desc = "Next tab (right)" },
   },
   opts = {
     options = {

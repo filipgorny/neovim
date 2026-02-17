@@ -21,7 +21,7 @@ local function parse_git_status()
     if staged_char == "?" and unstaged_char == "?" then
       table.insert(entries, { type = "?", staged = false, filename = filename })
     else
-      if staged_char ~= " " and (staged_char == "M" or staged_char == "D") then
+      if staged_char ~= " " and (staged_char == "M" or staged_char == "D" or staged_char == "A" or staged_char == "R") then
         table.insert(entries, { type = staged_char, staged = true, filename = filename })
       end
       if unstaged_char ~= " " and (unstaged_char == "M" or unstaged_char == "D") then
@@ -35,88 +35,191 @@ local function parse_git_status()
 end
 
 -- Główny picker
-M.review_changes = function()
+-- Build git change data for the overview (used by review_changes and refresh)
+local function build_git_change_data()
   local entries = parse_git_status()
-  if #entries == 0 then
-    print("✅ Brak zmian w repozytorium!")
+  if #entries == 0 then return nil end
+
+  local git_root = vim.fn.systemlist("git rev-parse --show-toplevel")[1] or ""
+
+  -- Get number of changes per file (added + removed lines) from both unstaged and staged
+  local numstat = {}
+  for _, diff_cmd in ipairs({ "git diff --numstat 2>/dev/null", "git diff --cached --numstat 2>/dev/null" }) do
+    local numstat_handle = io.popen(diff_cmd)
+    if numstat_handle then
+      for line in numstat_handle:lines() do
+        local added, removed, file = line:match("^(%d+)%s+(%d+)%s+(.+)$")
+        if added and removed and file then
+          local a, r = tonumber(added) or 0, tonumber(removed) or 0
+          if numstat[file] then
+            numstat[file].added = numstat[file].added + a
+            numstat[file].removed = numstat[file].removed + r
+          else
+            numstat[file] = { added = a, removed = r }
+          end
+        end
+      end
+      numstat_handle:close()
+    end
+  end
+
+  -- Build file paths list and type map
+  local file_paths = {}
+  local file_info = {}
+  local seen = {}
+  for _, entry in ipairs(entries) do
+    if not seen[entry.filename] and entry.type ~= "D" then
+      seen[entry.filename] = true
+      local full_path = git_root .. "/" .. entry.filename
+      table.insert(file_paths, full_path)
+
+      local stat = numstat[entry.filename]
+      local changes = stat and (stat.added + stat.removed) or 0
+      local total_lines = 0
+
+      if vim.fn.filereadable(full_path) == 1 then
+        local wc = vim.fn.system("wc -l < " .. vim.fn.shellescape(full_path))
+        total_lines = tonumber(vim.trim(wc)) or 0
+      end
+
+      if changes == 0 and (entry.type == "?" or entry.type == "A") then
+        changes = total_lines
+      end
+
+      local change_pct = 0
+      if total_lines > 0 then
+        change_pct = (changes / total_lines) * 100
+      end
+
+      file_info[full_path] = {
+        type = entry.type,
+        staged = entry.staged,
+        filename = entry.filename,
+        changes = changes,
+        change_pct = change_pct,
+      }
+    end
+  end
+
+  -- Group files by directory
+  local dir_files = {}
+  local dir_changes = {}
+
+  for _, fp in ipairs(file_paths) do
+    local info = file_info[fp]
+    local dir = vim.fn.fnamemodify(info.filename, ":h")
+    if dir == "." then dir = "" end
+
+    if not dir_files[dir] then
+      dir_files[dir] = {}
+      dir_changes[dir] = 0
+    end
+    table.insert(dir_files[dir], fp)
+    dir_changes[dir] = dir_changes[dir] + info.changes
+  end
+
+  -- Sort directories by total changes (most first)
+  local dirs = {}
+  for dir, _ in pairs(dir_files) do
+    table.insert(dirs, dir)
+  end
+  table.sort(dirs, function(a, b)
+    return dir_changes[a] > dir_changes[b]
+  end)
+
+  -- Sort files within each directory by changes (most first)
+  for _, dir in ipairs(dirs) do
+    table.sort(dir_files[dir], function(a, b)
+      return file_info[a].changes > file_info[b].changes
+    end)
+  end
+
+  -- Build final ordered list with directory headers (skip empty directories)
+  local display_items = {}
+  file_paths = {}
+
+  for _, dir in ipairs(dirs) do
+    if #dir_files[dir] > 0 then
+      table.insert(display_items, { is_header = true, dir = dir })
+      for _, fp in ipairs(dir_files[dir]) do
+        table.insert(display_items, { is_header = false, path = fp })
+        table.insert(file_paths, fp)
+      end
+    end
+  end
+
+  local function format_display(display_item)
+    if display_item.is_header then
+      local dir_display = display_item.dir
+      if dir_display == "" then
+        dir_display = "./"
+      else
+        dir_display = dir_display:gsub("^src/", "")
+        dir_display = dir_display .. "/"
+      end
+      return dir_display
+    else
+      local info = file_info[display_item.path]
+      local filename = vim.fn.fnamemodify(info.filename, ":t")
+      local icon = ""
+      local ok, devicons = pcall(require, "nvim-web-devicons")
+      if ok then
+        local ic = devicons.get_icon(filename)
+        if ic then
+          icon = ic .. " "
+        end
+      end
+      return "  " .. icon .. filename
+    end
+  end
+
+  local function highlight_display(display_item, file_index)
+    if display_item.is_header then
+      return "ListOverviewDirHeader"
+    end
+    if file_index and file_index == "selected" then
+      return "ListOverviewSelected"
+    end
+    local info = file_info[display_item.path]
+    if info.type == "?" or info.type == "A" then
+      return "ListOverviewNew"
+    end
+    if info.change_pct > 20 then
+      return "ListOverviewHeavy"
+    end
+    return "ListOverviewModified"
+  end
+
+  return {
+    items = file_paths,
+    display_items = display_items,
+    format_display = format_display,
+    highlight_display = highlight_display,
+  }
+end
+
+M.review_changes = function()
+  local ui = require("utils.ui")
+  local data = build_git_change_data()
+  if not data then
+    vim.notify("Brak zmian w repozytorium!", vim.log.levels.INFO)
     return
   end
 
-  pickers.new(
-    { -- opts
-      prompt_title = "Git Stage & Commit",
-      sorter = conf.generic_sorter({}),
-      previewer = previewers.new_termopen_previewer({
-        get_command = function(entry)
-          return { "git", "diff", "--color=always", "--", entry.filename }
-        end,
-      }),
-    },
-    { -- finder_table
-      finder = finders.new_table({
-        results = entries,
-        entry_maker = function(entry)
-          return {
-            value = entry.filename,
-            display = function(e)
-              local icon = e.staged and "" or "" -- staged/unstaged icon
-              return string.format("%s %s %s", icon, entry.type, e.value)
-            end,
-            ordinal = entry.filename,
-            type = entry.type,
-            staged = entry.staged,
-          }
-        end,
-      }),
-      attach_mappings = function(prompt_bufnr, map)
-        local picker = action_state.get_current_picker(prompt_bufnr)
+  -- Highlight groups (text color, normal background)
+  vim.api.nvim_set_hl(0, "ListOverviewNew", { fg = "#73c991" })
+  vim.api.nvim_set_hl(0, "ListOverviewModified", { fg = "#cca700" })
+  vim.api.nvim_set_hl(0, "ListOverviewHeavy", { fg = "#ffcc00", bold = true })
+  vim.api.nvim_set_hl(0, "ListOverviewDirHeader", { bold = true })
 
-        -- toggle stage/reset
-        local function toggle_and_stage()
-          local selection_index = picker:get_selection_row()
-          local entry = action_state.get_selected_entry()
-          entry.checked = not entry.checked
-
-          if entry.checked then
-            vim.fn.jobstart({ "git", "add", entry.value }, { detach = true })
-          else
-            vim.fn.jobstart({ "git", "reset", entry.value }, { detach = true })
-          end
-
-          picker:refresh()
-          picker:set_selection(selection_index)
-        end
-
-        -- commit dla zaznaczonych plików
-        local function commit_selected()
-          actions.close(prompt_bufnr)
-          vim.ui.input({ prompt = "Commit message: " }, function(msg)
-            if not msg or msg == "" then return end
-            local staged_files = {}
-            for _, e in ipairs(entries) do
-              if e.checked then
-                table.insert(staged_files, e.filename)
-              end
-            end
-            if #staged_files == 0 then
-              print("❌ Nie wybrano żadnych plików do commita!")
-              return
-            end
-
-            vim.fn.jobstart({ "git", "commit", "-m", msg }, { detach = true })
-            print("✅ Commit: " .. msg)
-          end)
-        end
-
-        map("i", "<space>", toggle_and_stage)
-        map("n", "<space>", toggle_and_stage)
-        map("i", "<C-c>", commit_selected)
-        map("n", "<C-c>", commit_selected)
-
-        return true
-      end,
-    }
-  ):find()
+  ui.create_list_overview({
+    items = data.items,
+    title_left = " Git Changes ",
+    display_items = data.display_items,
+    format_display = data.format_display,
+    highlight_display = data.highlight_display,
+    on_refresh = build_git_change_data,
+  })
 end
 
 -- Navigate to next git hunk/change

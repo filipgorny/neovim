@@ -39,12 +39,8 @@ keymap.bind("n", "<S-q>", function()
   end
 end)
 
--- Restart Neovim
-keymap.bind("n", "<leader>rr", function()
-  vim.cmd("wa") -- Save all buffers
-  vim.cmd("source $MYVIMRC") -- Reload config
-  vim.notify("Neovim config reloaded!", vim.log.levels.INFO)
-end)
+-- Restart Neovim (save state to SQLite, quit, process respawns)
+keymap.bind("n", "<leader>rr", require("utils.process").restart_nvim)
 
 keymap.bind_for_all("<C-a>", editing.select_all)
 
@@ -57,6 +53,9 @@ vim.keymap.set("n", "<S-[>", git.prev_hunk, { noremap = true, silent = true, des
 
 -- Git branch switching with session management
 keymap.bind("n", "<leader>gb", git.switch_branch) -- Switch git branch with auto-save/stash/session
+
+-- Git diff overview (file list + editable buffer)
+keymap.bind("n", "<leader>gd", git.review_changes) -- Git diff overview
 
 -- Git conflict resolution
 keymap.bind("n", "<leader>gm", git.resolve_conflicts) -- Resolve merge conflicts
@@ -107,9 +106,9 @@ keymap.bind("n", "<leader>dp", require("dap.ui.widgets").preview) -- Preview var
 -- File browsing
 keymap.bind("n", "<leader>l", file_browsing.find_files_by_mtime) -- Find files by modification time
 
--- Buffers navigation (Alt+k = previous, Alt+j = next)
-keymap.bind("n", "<M-k>", buffer_history.go_prev)
-keymap.bind("n", "<M-j>", buffer_history.go_next)
+-- Buffers navigation (Alt+k = left tab, Alt+j = right tab)
+keymap.bind("n", "<M-k>", "<cmd>BufferLineCyclePrev<CR>")
+keymap.bind("n", "<M-j>", "<cmd>BufferLineCycleNext<CR>")
 
 -- Telescope buffer list sorted by edit time (main buffer picker)
 keymap.bind("n", "<leader>b", function()

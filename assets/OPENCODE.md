@@ -84,6 +84,9 @@ If approval is not given, STOP immediately.
 - When working with external libraries, prefer using their official type definitions.
 - Follow the project's existing patterns for async/await, promises, and error handling.
 
-## 11. Final rule
+## 11. Formatting rules
+- Always add an empty line before the `return` keyword.
+
+## 12. Final rule
 Your role is execution and guidance only; you do not make decisions.  
 All initiative, design choices, and approvals come from the human conductor.

@@ -3073,4 +3073,454 @@ M.create_loading_tooltip = function(message, opts)
   }
 end
 
+-- Create a list overview with file list on the left (20%) and editable buffer on the right (80%)
+-- Uses real vim splits for full editing/LSP/gitsigns support
+-- @param opts table:
+--   items: string[] - list of file paths
+--   format_item: function(item, index, is_selected) -> string (optional)
+--   highlight_item: function(item, index, is_selected) -> string|nil (optional, returns hl group name)
+--   title_left: string (optional, default " Files ")
+--   on_open: function(item) (optional, called when a file is opened in right buffer)
+--   on_close: function() (optional, called when the view is closed)
+-- @return table: { close, select_item, get_current_index }
+M.create_list_overview = function(opts)
+  opts = opts or {}
+  local items = opts.items or {}
+  if #items == 0 then
+    vim.notify("No items to display", vim.log.levels.WARN)
+    return nil
+  end
+
+  local format_item = opts.format_item
+  local highlight_item = opts.highlight_item
+  local title_left = opts.title_left or " Files "
+  local on_open = opts.on_open
+  local on_close = opts.on_close
+  local on_refresh = opts.on_refresh -- fn() -> new_opts (returns fresh items/display_items/etc)
+
+  -- Grouped display support
+  local display_items = opts.display_items       -- { is_header, dir, path }[]
+  local format_display = opts.format_display     -- fn(display_item) -> string
+  local highlight_display = opts.highlight_display -- fn(display_item, file_index_or_"selected") -> hl group
+  local use_grouped = display_items and format_display and highlight_display
+
+  -- Build mapping: display line index -> file index in items (nil for headers)
+  local line_to_file_idx = {}  -- 1-indexed display line -> file index or nil
+  local file_idx_to_line = {}  -- file index -> display line
+  if use_grouped then
+    local file_i = 0
+    for line_i, di in ipairs(display_items) do
+      if not di.is_header then
+        file_i = file_i + 1
+        line_to_file_idx[line_i] = file_i
+        file_idx_to_line[file_i] = line_i
+      end
+    end
+  end
+
+  -- Save current state to restore on close
+  local saved_buf = vim.api.nvim_get_current_buf()
+  local saved_win = vim.api.nvim_get_current_win()
+
+  -- Current selection
+  local current_index = 1
+  local is_closed = false
+
+  -- Create the file list buffer (scratch, nofile)
+  local list_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_option(list_buf, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(list_buf, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(list_buf, "swapfile", false)
+  vim.api.nvim_buf_set_option(list_buf, "filetype", "list_overview")
+
+  -- Default highlight group for selected item (fallback if no highlight_item provided)
+  vim.api.nvim_set_hl(0, "ListOverviewSelected", { bg = "#ffffff", fg = "#000000" })
+
+  -- Create layout: left split for file list, right for editing
+  -- Start by creating a vertical split
+  vim.cmd("topleft vnew")
+  local list_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(list_win, list_buf)
+
+  -- Set left window width to 33%
+  local total_width = vim.o.columns
+  local list_width = math.floor(total_width * 0.25)
+  vim.api.nvim_win_set_width(list_win, list_width)
+
+  -- List window options
+  vim.api.nvim_win_set_option(list_win, "number", false)
+  vim.api.nvim_win_set_option(list_win, "relativenumber", false)
+  vim.api.nvim_win_set_option(list_win, "signcolumn", "no")
+  vim.api.nvim_win_set_option(list_win, "cursorline", false)  -- We handle highlighting ourselves
+  vim.api.nvim_win_set_option(list_win, "winfixwidth", true)
+  vim.api.nvim_win_set_option(list_win, "wrap", false)
+  vim.api.nvim_win_set_option(list_win, "statusline", title_left)
+
+  -- Force list buffer to always stay in normal mode
+  -- Map every key that could enter insert mode to do nothing
+  for _, key in ipairs({ "i", "I", "a", "A", "o", "O", "s", "S", "c", "C", "R", "gi" }) do
+    vim.api.nvim_buf_set_keymap(list_buf, "n", key, "", { noremap = true, silent = true })
+  end
+
+  -- The right window is whichever window remains (the original or next)
+  -- Move to the right split
+  vim.cmd("wincmd l")
+  local edit_win = vim.api.nvim_get_current_win()
+
+  -- Namespace for highlights
+  local ns = vim.api.nvim_create_namespace("list_overview")
+
+  -- Forward declarations
+  local render_list, open_file, select_next, select_prev, close, refresh
+  local open_from_cursor, setup_edit_buf_keymaps, cleanup_edit_buf_keymaps
+
+  -- Augroup for edit buffer keymaps
+  local augroup = vim.api.nvim_create_augroup("ListOverviewEditKeys", { clear = true })
+
+  -- Track buffers where we set keymaps so we can clean up
+  local mapped_bufs = {}
+
+  setup_edit_buf_keymaps = function(buf)
+    -- Only set if not already set and buffer is valid
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    if mapped_bufs[buf] then return end
+    mapped_bufs[buf] = true
+
+    local key_opts = { noremap = true, silent = true, buffer = buf }
+
+    vim.keymap.set("n", "]", function()
+      if not is_closed then select_next() end
+    end, key_opts)
+
+    vim.keymap.set("n", "[", function()
+      if not is_closed then select_prev() end
+    end, key_opts)
+
+    vim.keymap.set("n", "<Esc><Esc>", function()
+      if not is_closed then close() end
+    end, key_opts)
+
+    vim.keymap.set("n", "<M-r>", function()
+      if not is_closed then refresh() end
+    end, key_opts)
+
+    vim.keymap.set("n", "<Tab>", function()
+      if not is_closed and vim.api.nvim_win_is_valid(list_win) then
+        vim.api.nvim_set_current_win(list_win)
+      end
+    end, key_opts)
+
+    vim.keymap.set("n", "<C-h>", function()
+      if not is_closed and vim.api.nvim_win_is_valid(list_win) then
+        vim.api.nvim_set_current_win(list_win)
+      end
+    end, key_opts)
+
+    -- Handle mouse click on file list while in insert mode in the edit buffer
+    vim.keymap.set("i", "<LeftMouse>", function()
+      if is_closed then return end
+      local mouse_pos = vim.fn.getmousepos()
+      if mouse_pos.winid == list_win then
+        vim.cmd("stopinsert")
+        vim.api.nvim_set_current_win(list_win)
+        pcall(vim.api.nvim_win_set_cursor, list_win, { mouse_pos.line, 0 })
+        open_from_cursor()
+        return
+      end
+      -- Default behavior: feed the key back for normal mouse handling
+      local keys = vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true)
+      vim.api.nvim_feedkeys(keys, "ni", false)
+    end, key_opts)
+  end
+
+  cleanup_edit_buf_keymaps = function()
+    for buf, _ in pairs(mapped_bufs) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.keymap.del, "n", "]", { buffer = buf })
+        pcall(vim.keymap.del, "n", "[", { buffer = buf })
+        pcall(vim.keymap.del, "n", "<Esc><Esc>", { buffer = buf })
+        pcall(vim.keymap.del, "n", "<M-r>", { buffer = buf })
+        pcall(vim.keymap.del, "n", "<Tab>", { buffer = buf })
+        pcall(vim.keymap.del, "n", "<C-h>", { buffer = buf })
+        pcall(vim.keymap.del, "i", "<LeftMouse>", { buffer = buf })
+      end
+    end
+    mapped_bufs = {}
+  end
+
+  -- Render the file list
+  render_list = function()
+    if not vim.api.nvim_buf_is_valid(list_buf) then return end
+
+    local lines = {}
+    local line_highlights = {}
+
+    if use_grouped then
+      -- Grouped mode: render headers + files
+      for line_i, di in ipairs(display_items) do
+        table.insert(lines, format_display(di))
+        local file_idx = line_to_file_idx[line_i]
+        if di.is_header then
+          table.insert(line_highlights, highlight_display(di, nil))
+        elseif file_idx == current_index then
+          table.insert(line_highlights, "ListOverviewSelected")
+        else
+          table.insert(line_highlights, highlight_display(di, file_idx))
+        end
+      end
+    else
+      -- Simple mode: flat list
+      for i, item in ipairs(items) do
+        local display
+        if format_item then
+          display = format_item(item, i, i == current_index)
+        else
+          display = " " .. vim.fn.fnamemodify(item, ":t")
+        end
+        table.insert(lines, display)
+        if i == current_index then
+          table.insert(line_highlights, "ListOverviewSelected")
+        elseif highlight_item then
+          table.insert(line_highlights, highlight_item(items[i], i, false))
+        else
+          table.insert(line_highlights, nil)
+        end
+      end
+    end
+
+    vim.api.nvim_buf_set_option(list_buf, "modifiable", true)
+    vim.api.nvim_buf_set_lines(list_buf, 0, -1, false, lines)
+    vim.api.nvim_buf_set_option(list_buf, "modifiable", false)
+
+    -- Apply highlights
+    vim.api.nvim_buf_clear_namespace(list_buf, ns, 0, -1)
+    for i, hl_group in ipairs(line_highlights) do
+      if hl_group then
+        vim.api.nvim_buf_add_highlight(list_buf, ns, hl_group, i - 1, 0, -1)
+      end
+    end
+  end
+
+  -- Open a file in the right buffer
+  open_file = function(index)
+    if index < 1 or index > #items then return end
+    current_index = index
+
+    local filepath = items[index]
+    if not vim.api.nvim_win_is_valid(edit_win) then return end
+
+    -- Open the file in the edit window (reuse existing buffer to avoid swap prompts)
+    vim.api.nvim_set_current_win(edit_win)
+    local existing_buf = vim.fn.bufnr(filepath)
+    if existing_buf ~= -1 then
+      vim.api.nvim_win_set_buf(edit_win, existing_buf)
+      -- nvim_win_set_buf doesn't trigger BufEnter, so set keymaps manually
+      setup_edit_buf_keymaps(existing_buf)
+    else
+      vim.cmd("edit " .. vim.fn.fnameescape(filepath))
+    end
+
+    -- Update the list highlighting
+    render_list()
+
+    -- Move cursor in file list to match
+    if vim.api.nvim_win_is_valid(list_win) and vim.api.nvim_buf_is_valid(list_buf) then
+      local cursor_line = current_index
+      if use_grouped and file_idx_to_line[current_index] then
+        cursor_line = file_idx_to_line[current_index]
+      end
+      vim.api.nvim_win_set_cursor(list_win, { cursor_line, 0 })
+    end
+
+    if on_open then
+      on_open(filepath)
+    end
+  end
+
+  -- Navigate to next/previous item
+  select_next = function()
+    if current_index < #items then
+      open_file(current_index + 1)
+    end
+  end
+
+  select_prev = function()
+    if current_index > 1 then
+      open_file(current_index - 1)
+    end
+  end
+
+  -- Close the overview
+  close = function()
+    if is_closed then return end
+    is_closed = true
+
+    -- Clean up keymaps from edit buffers
+    cleanup_edit_buf_keymaps()
+
+    -- Clean up augroup
+    pcall(vim.api.nvim_del_augroup_by_id, augroup)
+
+    -- Clean up list buffer/window
+    if vim.api.nvim_win_is_valid(list_win) then
+      vim.api.nvim_win_close(list_win, true)
+    end
+
+    -- Restore original buffer in edit window
+    if vim.api.nvim_win_is_valid(edit_win) and vim.api.nvim_buf_is_valid(saved_buf) then
+      vim.api.nvim_set_current_win(edit_win)
+      vim.api.nvim_win_set_buf(edit_win, saved_buf)
+    end
+
+    if on_close then
+      on_close()
+    end
+  end
+
+  -- Total display lines (grouped mode has headers + files, simple mode just files)
+  local total_display_lines = use_grouped and #display_items or #items
+
+  -- Refresh the list in-place (re-fetch data without closing windows)
+  refresh = function()
+    if is_closed or not on_refresh then return end
+    local new_opts = on_refresh()
+    if not new_opts then return end
+
+    -- Update items and grouped data
+    items = new_opts.items or items
+    display_items = new_opts.display_items
+    format_display = new_opts.format_display
+    highlight_display = new_opts.highlight_display
+    format_item = new_opts.format_item or format_item
+    highlight_item = new_opts.highlight_item or highlight_item
+    use_grouped = display_items and format_display and highlight_display
+
+    -- Rebuild line mappings
+    line_to_file_idx = {}
+    file_idx_to_line = {}
+    if use_grouped then
+      local file_i = 0
+      for line_i, di in ipairs(display_items) do
+        if not di.is_header then
+          file_i = file_i + 1
+          line_to_file_idx[line_i] = file_i
+          file_idx_to_line[file_i] = line_i
+        end
+      end
+    end
+
+    total_display_lines = use_grouped and #display_items or #items
+
+    -- Clamp current_index
+    if current_index > #items then
+      current_index = math.max(1, #items)
+    end
+
+    render_list()
+  end
+
+  -- Open file from list cursor position (handles grouped mode)
+  open_from_cursor = function()
+    local cursor = vim.api.nvim_win_get_cursor(list_win)
+    local line = cursor[1]
+    if use_grouped then
+      local file_idx = line_to_file_idx[line]
+      if file_idx then
+        open_file(file_idx)
+      end
+    else
+      open_file(line)
+    end
+  end
+
+  -- Set up keymaps for the list buffer
+  local list_keymaps = {
+    -- Navigation in file list
+    { "n", "j", function()
+      local cursor = vim.api.nvim_win_get_cursor(list_win)
+      if cursor[1] < total_display_lines then
+        vim.api.nvim_win_set_cursor(list_win, { cursor[1] + 1, 0 })
+      end
+    end },
+    { "n", "k", function()
+      local cursor = vim.api.nvim_win_get_cursor(list_win)
+      if cursor[1] > 1 then
+        vim.api.nvim_win_set_cursor(list_win, { cursor[1] - 1, 0 })
+      end
+    end },
+    -- Enter / mouse click opens the file under cursor
+    { "n", "<CR>", open_from_cursor },
+    { "n", "<LeftRelease>", open_from_cursor },
+    -- ] and [ navigate and open
+    { "n", "]", select_next },
+    { "n", "[", select_prev },
+    -- Close
+    { "n", "q", close },
+    { "n", "<Esc><Esc>", close },
+    -- Refresh
+    { "n", "<M-r>", refresh },
+    -- Switch to edit window
+    { "n", "<Tab>", function()
+      if vim.api.nvim_win_is_valid(edit_win) then
+        vim.api.nvim_set_current_win(edit_win)
+      end
+    end },
+    { "n", "<C-l>", function()
+      if vim.api.nvim_win_is_valid(edit_win) then
+        vim.api.nvim_set_current_win(edit_win)
+      end
+    end },
+  }
+
+  for _, km in ipairs(list_keymaps) do
+    vim.api.nvim_buf_set_keymap(list_buf, km[1], km[2], "", {
+      noremap = true, silent = true, callback = km[3],
+    })
+  end
+
+  -- When a new buffer is loaded in the edit window, set up keymaps
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = augroup,
+    callback = function(ev)
+      if is_closed then return end
+      -- Check if we're in the edit window
+      local current_win = vim.api.nvim_get_current_win()
+      if current_win == edit_win then
+        setup_edit_buf_keymaps(ev.buf)
+      end
+    end,
+  })
+
+  -- Clean up when list window is closed
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = augroup,
+    pattern = tostring(list_win),
+    callback = function()
+      if not is_closed then
+        is_closed = true
+        vim.api.nvim_del_augroup_by_id(augroup)
+        if on_close then on_close() end
+      end
+    end,
+  })
+
+  -- Initial render and open first file
+  render_list()
+  open_file(1)
+
+  -- Focus the edit window
+  if vim.api.nvim_win_is_valid(edit_win) then
+    vim.api.nvim_set_current_win(edit_win)
+  end
+
+  return {
+    close = close,
+    refresh = refresh,
+    select_item = open_file,
+    select_next = select_next,
+    select_prev = select_prev,
+    get_current_index = function() return current_index end,
+  }
+end
+
 return M
