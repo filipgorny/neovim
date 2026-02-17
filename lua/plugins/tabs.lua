@@ -6,8 +6,8 @@ return {
     { "<leader>bP", "<Cmd>BufferLineGroupClose ungrouped<CR>", desc = "Delete Non-Pinned Buffers" },
     { "<leader>br", "<Cmd>BufferLineCloseRight<CR>", desc = "Delete Buffers to the Right" },
     { "<leader>bl", "<Cmd>BufferLineCloseLeft<CR>", desc = "Delete Buffers to the Left" },
-    { "<M-k>",      "<cmd>BufferLineCyclePrev<cr>", desc = "Previous tab" },
-    { "<M-j>",      "<cmd>BufferLineCycleNext<cr>", desc = "Next tab" },
+    { "<M-k>", function() require("utils.buffer_history").go_prev() end, desc = "Previous tab (history)" },
+    { "<M-j>", function() require("utils.buffer_history").go_next() end, desc = "Next tab (history)" },
   },
   opts = {
     options = {
@@ -27,12 +27,34 @@ return {
         },
       },
       numbers = "ordinal",
-      close_command = "bdelete! %", -- zamykanie buforów
+      close_command = "bdelete! %",
       right_mouse_command = "bdelete! %",
+      sort_by = function(buf_a, buf_b)
+        -- Sort by buffer history (most recent last, so it appears on the right)
+        local history = require("utils.buffer_history").history
+        local pos_a, pos_b = #history + 1, #history + 1
+        for i, buf in ipairs(history) do
+          if buf == buf_a.id then pos_a = i end
+          if buf == buf_b.id then pos_b = i end
+        end
+        return pos_a < pos_b
+      end,
     },
   },
   config = function(_, opts)
     local bufferline = require("bufferline")
+
     bufferline.setup(opts)
+
+    -- Re-sort tabs when switching buffers
+    vim.api.nvim_create_autocmd("BufEnter", {
+      callback = function()
+        vim.schedule(function()
+          pcall(function()
+            bufferline.sort_by("custom")
+          end)
+        end)
+      end,
+    })
   end,
 }

@@ -10,3 +10,7 @@ vim.opt.syntax = "on"
 
 -- Włącz automatyczne wykrywanie typu pliku
 vim.cmd("filetype plugin indent on")
+
+-- Włącz pełną obsługę myszki (resize okien, scroll, visual selection)
+vim.opt.mouse = "a"
+vim.opt.mousemoveevent = true

@@ -15,7 +15,7 @@ return {
     dependencies = { "mason.nvim" },
     config = function()
       require("mason-lspconfig").setup({
-        ensure_installed = { "ts_ls", "eslint", "lua_ls", "gopls" },
+        ensure_installed = { "ts_ls", "eslint", "lua_ls", "gopls", "prismals" },
         automatic_installation = true,
         automatic_enable = true, -- włącza lsp automatycznie po otwarciu pliku
       })
@@ -344,6 +344,28 @@ return {
         pattern = "go",
         callback = function()
           vim.lsp.enable("gopls")
+        end,
+      })
+
+      -- =========================
+      -- Prisma language server
+      vim.lsp.config("prismals", {
+        cmd = { "prisma-language-server", "--stdio" },
+        filetypes = { "prisma" },
+        root_markers = { "schema.prisma", ".git" },
+        capabilities = cmp_capabilities,
+        on_attach = common_on_attach,
+        settings = {
+          prisma = {
+            prismaFmtBinPath = "",
+          },
+        },
+      })
+
+      vim.api.nvim_create_autocmd("FileType", {
+        pattern = "prisma",
+        callback = function()
+          vim.lsp.enable("prismals")
         end,
       })
 

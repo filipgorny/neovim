@@ -75,7 +75,9 @@ keymap.bind("v", "<leader>aa", llm.ask_about_selection) -- Ask about selected co
 keymap.bind("n", "<leader>ai", llm.open_chat)          -- Open interactive chat with Claude
 keymap.bind("n", "<leader>ap", llm.apply_chat_changes) -- Apply code changes from chat
 keymap.bind("n", "<leader>ax", llm.clear_chat)         -- Clear chat history
-keymap.bind("n", "<leader>i", assist.show_symbol_info)  -- Get AI info about symbol under cursor
+-- NOTE: <leader>i is now used by opencode.nvim for quick_chat inline dialog
+-- keymap.bind("n", "<leader>i", assist.show_symbol_info)  -- Get AI info about symbol under cursor (moved to <leader>as)
+keymap.bind("n", "<leader>as", assist.show_symbol_info)  -- Get AI info about symbol under cursor
 
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
@@ -105,8 +107,17 @@ keymap.bind("n", "<leader>dp", require("dap.ui.widgets").preview) -- Preview var
 -- File browsing
 keymap.bind("n", "<leader>l", file_browsing.find_files_by_mtime) -- Find files by modification time
 
--- Buffers navigation
-keymap.bind("n", "<M-h>", buffer_history.go_prev)
+-- Buffers navigation (Alt+k = previous, Alt+j = next)
+keymap.bind("n", "<M-k>", buffer_history.go_prev)
+keymap.bind("n", "<M-j>", buffer_history.go_next)
+
+-- Telescope buffer list sorted by edit time (main buffer picker)
+keymap.bind("n", "<leader>b", function()
+  require("utils.telescope_buffers").buffers_by_edit_time()
+end)
+
+-- Show buffer history for debugging
+keymap.bind("n", "<leader>bh", buffer_history.show_history)
 
 -- Exit editor
 keymap.bind("n", "<C-M-q>", ":exit <CR>");

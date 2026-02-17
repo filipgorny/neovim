@@ -716,6 +716,38 @@ function M.clear_history()
   vim.notify("Edit history and buffer positions cleared", vim.log.levels.INFO)
 end
 
+-- Get unique buffers sorted by last edit time (for Telescope)
+function M.get_buffers_by_edit_time()
+  local history = get_history()
+  
+  if #history == 0 then
+    return {}
+  end
+  
+  -- Deduplicate by file_path, keeping only the most recent edit
+  local seen = {}
+  local unique_buffers = {}
+  
+  for _, loc in ipairs(history) do
+    if not seen[loc.file] then
+      -- Check if buffer is actually open
+      local bufnr = vim.fn.bufnr(loc.file)
+      if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+        seen[loc.file] = true
+        table.insert(unique_buffers, {
+          file = loc.file,
+          bufnr = bufnr,
+          line = loc.line,
+          col = loc.col,
+          timestamp = loc.timestamp,
+        })
+      end
+    end
+  end
+  
+  return unique_buffers
+end
+
 -- Get status
 function M.status()
   local history = get_history()

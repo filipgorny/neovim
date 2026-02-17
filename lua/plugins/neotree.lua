@@ -204,7 +204,6 @@ return {
               },
             },
             ["A"] = "add_directory", -- also accepts the optional config.show_path option like "add". this also supports BASH style brace expansion.
-            ["g"] = "generate_file", -- Generate file with code generator
             ["d"] = "delete",
             ["r"] = "rename",
             ["b"] = "rename_basename",
