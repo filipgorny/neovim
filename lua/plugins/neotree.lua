@@ -56,6 +56,8 @@ return {
       -- vim.fn.sign_define("DiagnosticSignInfo", { text = " ", texthl = "DiagnosticSignInfo" })
       -- vim.fn.sign_define("DiagnosticSignHint", { text = "󰌵", texthl = "DiagnosticSignHint" })
 
+      vim.api.nvim_set_hl(0, "NeoTreeFavorite", { fg = "#e2b714" })
+
       require("neo-tree").setup({
         open_on_setup = false,
         close_if_last_window = false, -- Close Neo-tree if it is the last window left in the tab
@@ -65,14 +67,39 @@ return {
         open_files_do_not_replace_types = { "terminal", "trouble", "qf" }, -- when opening files, do not use windows containing these filetypes or buftypes
         open_files_using_relative_paths = false,
         sort_case_insensitive = false,                                     -- used when sorting files and directories in the tree
-        sort_function = nil,                                               -- use a custom function for sorting files and directories in the tree
-        -- sort_function = function (a,b)
-        --       if a.type == b.type then
-        --           return a.path > b.path
-        --       else
-        --           return a.type > b.type
-        --       end
-        --   end , -- this sorts files and directories descendantly
+        sort_function = nil,
+        event_handlers = {
+          {
+            event = "after_render",
+            handler = function(state)
+              if state.name ~= "filesystem" then return end
+              local buf = state.bufnr
+              if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+
+              local ns = vim.api.nvim_create_namespace("neo_tree_favorites")
+              vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+
+              local favorites = require("utils.favorites")
+              local all = favorites.get_all()
+              if #all == 0 then return end
+
+              local cwd = vim.fn.getcwd()
+              local virt_lines = { { { "  ★ Favorites", "NeoTreeFavorite" } } }
+              for _, path in ipairs(all) do
+                local name = vim.fn.fnamemodify(path, ":t")
+                local rel = vim.fn.fnamemodify(path, ":." )
+                if rel == path then rel = path end
+                table.insert(virt_lines, { { "    " .. name .. "  ", "NeoTreeFileName" }, { rel, "NeoTreeDimText" } })
+              end
+              table.insert(virt_lines, { { "  ─────────────────", "NeoTreeDimText" } })
+
+              vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
+                virt_lines_above = true,
+                virt_lines = virt_lines,
+              })
+            end,
+          },
+        },
         default_component_configs = {
           container = {
             enable_character_fade = true,
@@ -288,6 +315,7 @@ return {
               ["#"] = "fuzzy_sorter", -- fuzzy sorting using the fzy algorithm
               -- ["D"] = "fuzzy_sorter_directory",
               ["f"] = "filter_on_submit",
+              ["ff"] = { "toggle_favorite", nowait = false },
               ["<c-x>"] = "clear_filter",
               ["[g"] = "prev_git_modified",
               ["]g"] = "next_git_modified",
@@ -315,7 +343,54 @@ return {
             },
           },
 
+          components = {
+            favorite_icon = function(config, node, state)
+              local fav = require("utils.favorites")
+              if fav.is_favorite(node:get_id()) then
+                return { text = "★ ", highlight = "NeoTreeFavorite" }
+              end
+              return {}
+            end,
+          },
+
+          renderers = {
+            directory = {
+              { "indent" },
+              { "icon" },
+              { "current_filter" },
+              { "favorite_icon" },
+              { "container", content = {
+                { "name", zindex = 10 },
+                { "symlink_target", zindex = 10, highlight = "NeoTreeSymbolicLinkTarget" },
+                { "clipboard", zindex = 10 },
+                { "diagnostics", errors_only = true, zindex = 20, align = "right", hide_when_expanded = true },
+                { "git_status", zindex = 20, align = "right", hide_when_expanded = true },
+              }},
+            },
+            file = {
+              { "indent" },
+              { "icon" },
+              { "favorite_icon" },
+              { "container", content = {
+                { "name", zindex = 10 },
+                { "symlink_target", zindex = 10, highlight = "NeoTreeSymbolicLinkTarget" },
+                { "clipboard", zindex = 10 },
+                { "bufnr", zindex = 10 },
+                { "modified", zindex = 20, align = "right" },
+                { "diagnostics", zindex = 20, align = "right" },
+                { "git_status", zindex = 20, align = "right" },
+              }},
+            },
+          },
+
           commands = {
+            toggle_favorite = function(state)
+              local node = state.tree:get_node()
+              local path = node:get_id()
+              require("utils.favorites").toggle(path)
+              require("neo-tree.sources.manager").refresh("filesystem")
+            end,
+
             -- Custom command to create file with generator
             generate_file = function(state)
               local node = state.tree:get_node()

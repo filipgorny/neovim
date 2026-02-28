@@ -66,17 +66,8 @@ vim.keymap.set("n", "<C-k>", navigation.go_forward, { noremap = true, silent = t
 vim.keymap.set("n", "<leader>nh", navigation.show_history, { noremap = true, silent = true, desc = "Show edit history" })
 vim.keymap.set("n", "<leader>nc", navigation.clear_history, { noremap = true, silent = true, desc = "Clear edit history" })
 
--- LLM/AI keybindings
-keymap.bind("n", "<leader>ar", llm.review_diff)        -- Review all git changes
-keymap.bind("n", "<leader>af", llm.review_file)        -- Review current file changes
-keymap.bind("n", "<leader>ac", llm.analyze_file)       -- Analyze current file (bugs, quality, etc)
-keymap.bind("v", "<leader>aa", llm.ask_about_selection) -- Ask about selected code
-keymap.bind("n", "<leader>ai", llm.open_chat)          -- Open interactive chat with Claude
-keymap.bind("n", "<leader>ap", llm.apply_chat_changes) -- Apply code changes from chat
-keymap.bind("n", "<leader>ax", llm.clear_chat)         -- Clear chat history
--- NOTE: <leader>i is now used by opencode.nvim for quick_chat inline dialog
--- keymap.bind("n", "<leader>i", assist.show_symbol_info)  -- Get AI info about symbol under cursor (moved to <leader>as)
-keymap.bind("n", "<leader>as", assist.show_symbol_info)  -- Get AI info about symbol under cursor
+-- Terry assistant
+vim.keymap.set("n", "<leader>a", function() require("terry").toggle() end, { noremap = true, silent = true, desc = "Toggle Terry assistant" })
 
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
@@ -117,6 +108,15 @@ end)
 
 -- Show buffer history for debugging
 keymap.bind("n", "<leader>bh", buffer_history.show_history)
+
+-- Change/substitute without yanking (only y and d yank to register)
+for _, mode in ipairs({ "n", "v" }) do
+  for _, key in ipairs({ "c", "C", "x", "s", "S" }) do
+    vim.keymap.set(mode, key, '"_' .. key, { noremap = true, silent = true })
+  end
+end
+-- Backspace in visual mode deletes selection without yanking
+vim.keymap.set("v", "<BS>", '"_d', { noremap = true, silent = true })
 
 -- Exit editor
 keymap.bind("n", "<C-M-q>", ":exit <CR>");

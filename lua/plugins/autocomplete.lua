@@ -19,7 +19,7 @@ return {
     local ok_lsp, cmp_lsp = pcall(require, "cmp_nvim_lsp")
     if ok_lsp then
       local capabilities = cmp_lsp.default_capabilities()
-      for _, client in pairs(vim.lsp.get_active_clients()) do
+      for _, client in pairs(vim.lsp.get_clients()) do
         client.server_capabilities = vim.tbl_deep_extend("force", client.server_capabilities, capabilities)
       end
     end

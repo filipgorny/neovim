@@ -19,7 +19,20 @@ local function parse_git_status()
     local filename = line:sub(4)
 
     if staged_char == "?" and unstaged_char == "?" then
-      table.insert(entries, { type = "?", staged = false, filename = filename })
+      if filename:sub(-1) == "/" then
+        -- Untracked directory: expand to individual files
+        local ls_handle = io.popen("git ls-files --others --exclude-standard -- " .. vim.fn.shellescape(filename) .. " 2>/dev/null")
+        if ls_handle then
+          for file_line in ls_handle:lines() do
+            if file_line ~= "" then
+              table.insert(entries, { type = "?", staged = false, filename = file_line })
+            end
+          end
+          ls_handle:close()
+        end
+      else
+        table.insert(entries, { type = "?", staged = false, filename = filename })
+      end
     else
       if staged_char ~= " " and (staged_char == "M" or staged_char == "D" or staged_char == "A" or staged_char == "R") then
         table.insert(entries, { type = staged_char, staged = true, filename = filename })
@@ -157,7 +170,7 @@ local function build_git_change_data()
         dir_display = dir_display:gsub("^src/", "")
         dir_display = dir_display .. "/"
       end
-      return dir_display
+      return " " .. dir_display
     else
       local info = file_info[display_item.path]
       local filename = vim.fn.fnamemodify(info.filename, ":t")
@@ -169,25 +182,37 @@ local function build_git_change_data()
           icon = ic .. " "
         end
       end
-      return "  " .. icon .. filename
+      local prefix = "  " .. icon
+      display_item.icon_end_byte = #prefix
+      return prefix .. filename
     end
   end
 
   local function highlight_display(display_item, file_index)
     if display_item.is_header then
-      return "ListOverviewDirHeader"
+      local icon_bytes = #(" ")
+      return {
+        { "ListOverviewFolderIcon", 0, icon_bytes },
+        { "ListOverviewDirHeader", icon_bytes, -1 },
+      }
     end
     if file_index and file_index == "selected" then
       return "ListOverviewSelected"
     end
     local info = file_info[display_item.path]
+    local file_hl
     if info.type == "?" or info.type == "A" then
-      return "ListOverviewNew"
+      file_hl = "ListOverviewNew"
+    elseif info.change_pct > 20 then
+      file_hl = "ListOverviewHeavy"
+    else
+      file_hl = "ListOverviewModified"
     end
-    if info.change_pct > 20 then
-      return "ListOverviewHeavy"
-    end
-    return "ListOverviewModified"
+    local icon_end = display_item.icon_end_byte or 2
+    return {
+      { "ListOverviewIcon", 2, icon_end },
+      { file_hl, icon_end, -1 },
+    }
   end
 
   return {
@@ -196,6 +221,20 @@ local function build_git_change_data()
     format_display = format_display,
     highlight_display = highlight_display,
   }
+end
+
+-- Extract unique parent directories from file paths (for fs watchers)
+local function get_watch_dirs(file_items)
+  local dirs = {}
+  local seen = {}
+  for _, fp in ipairs(file_items) do
+    local dir = vim.fn.fnamemodify(fp, ":h")
+    if not seen[dir] then
+      seen[dir] = true
+      table.insert(dirs, dir)
+    end
+  end
+  return dirs
 end
 
 M.review_changes = function()
@@ -210,7 +249,11 @@ M.review_changes = function()
   vim.api.nvim_set_hl(0, "ListOverviewNew", { fg = "#73c991" })
   vim.api.nvim_set_hl(0, "ListOverviewModified", { fg = "#cca700" })
   vim.api.nvim_set_hl(0, "ListOverviewHeavy", { fg = "#ffcc00", bold = true })
-  vim.api.nvim_set_hl(0, "ListOverviewDirHeader", { bold = true })
+  vim.api.nvim_set_hl(0, "ListOverviewDirHeader", { fg = "#888888", bold = true })
+  vim.api.nvim_set_hl(0, "ListOverviewIcon", { fg = "#ffffff" })
+  -- Folder icon color: use Normal fg so it adapts to light/dark themes
+  local normal_hl = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  vim.api.nvim_set_hl(0, "ListOverviewFolderIcon", { fg = normal_hl.fg })
 
   ui.create_list_overview({
     items = data.items,
@@ -219,6 +262,9 @@ M.review_changes = function()
     format_display = data.format_display,
     highlight_display = data.highlight_display,
     on_refresh = build_git_change_data,
+    auto_refresh = true,
+    watch_dirs = get_watch_dirs(data.items),
+    on_refresh_dirs = get_watch_dirs,
   })
 end
 

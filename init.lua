@@ -15,6 +15,7 @@ require("utils.generator").setup()
 require("system.debugging").setup()
 require("utils.navigation").setup()
 require("utils.buffer_history").setup()
+require("utils.resize_cursor").setup()
 
 -- Setup LLM with provider and API key from .env
 -- Choose your provider:

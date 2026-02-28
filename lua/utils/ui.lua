@@ -3097,6 +3097,8 @@ M.create_list_overview = function(opts)
   local on_open = opts.on_open
   local on_close = opts.on_close
   local on_refresh = opts.on_refresh -- fn() -> new_opts (returns fresh items/display_items/etc)
+  local auto_refresh = opts.auto_refresh
+  local on_refresh_dirs = opts.on_refresh_dirs -- fn(items) -> dir list (called after refresh to rebuild watchers)
 
   -- Grouped display support
   local display_items = opts.display_items       -- { is_header, dir, path }[]
@@ -3126,6 +3128,74 @@ M.create_list_overview = function(opts)
   local current_index = 1
   local is_closed = false
 
+  -- Auto-refresh infrastructure (fs watchers + debounce + polling)
+  local fs_watchers = {}
+  local pending_timer = nil
+  local poll_timer = nil
+  local last_git_status = nil
+  local refresh -- forward declare so schedule_refresh can reference it
+  local start_watchers, stop_watchers -- forward declare
+
+  local function schedule_refresh()
+    if is_closed then return end
+    if pending_timer then return end
+    pending_timer = vim.defer_fn(function()
+      pending_timer = nil
+      if not is_closed then
+        refresh()
+        if auto_refresh and on_refresh_dirs then
+          local new_dirs = on_refresh_dirs(items)
+          if new_dirs then
+            start_watchers(new_dirs)
+          end
+        end
+      end
+    end, 300)
+  end
+
+  stop_watchers = function()
+    for _, w in ipairs(fs_watchers) do
+      if not w:is_closing() then
+        w:stop()
+        w:close()
+      end
+    end
+    fs_watchers = {}
+  end
+
+  start_watchers = function(dirs)
+    stop_watchers()
+    if not auto_refresh then return end
+
+    -- Watch .git/index for staging changes
+    local git_dir = vim.fn.systemlist("git rev-parse --git-dir")[1]
+    if git_dir and git_dir ~= "" then
+      local index_path = git_dir .. "/index"
+      local w = vim.loop.new_fs_event()
+      if w then
+        w:start(index_path, {}, vim.schedule_wrap(function(err)
+          if not err then schedule_refresh() end
+        end))
+        table.insert(fs_watchers, w)
+      end
+    end
+
+    -- Watch directories containing diffed files
+    local seen_dirs = {}
+    for _, dir in ipairs(dirs) do
+      if not seen_dirs[dir] and vim.fn.isdirectory(dir) == 1 then
+        seen_dirs[dir] = true
+        local w = vim.loop.new_fs_event()
+        if w then
+          w:start(dir, {}, vim.schedule_wrap(function(err)
+            if not err then schedule_refresh() end
+          end))
+          table.insert(fs_watchers, w)
+        end
+      end
+    end
+  end
+
   -- Create the file list buffer (scratch, nofile)
   local list_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(list_buf, "buftype", "nofile")
@@ -3142,9 +3212,16 @@ M.create_list_overview = function(opts)
   local list_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(list_win, list_buf)
 
-  -- Set left window width to 33%
+  -- Set left window width to 25% of available space (excluding opencode panel)
   local total_width = vim.o.columns
-  local list_width = math.floor(total_width * 0.25)
+  local oc_width = 0
+  local ok_oc, oc_state = pcall(require, 'opencode.state')
+  if ok_oc and oc_state.windows and oc_state.windows.output_win
+     and vim.api.nvim_win_is_valid(oc_state.windows.output_win) then
+    oc_width = vim.api.nvim_win_get_width(oc_state.windows.output_win)
+  end
+  local available_width = total_width - oc_width
+  local list_width = math.floor(available_width * 0.25)
   vim.api.nvim_win_set_width(list_win, list_width)
 
   -- List window options
@@ -3157,10 +3234,31 @@ M.create_list_overview = function(opts)
   vim.api.nvim_win_set_option(list_win, "statusline", title_left)
 
   -- Force list buffer to always stay in normal mode
-  -- Map every key that could enter insert mode to do nothing
+  -- Block keys that enter insert mode
   for _, key in ipairs({ "i", "I", "a", "A", "o", "O", "s", "S", "c", "C", "R", "gi" }) do
     vim.api.nvim_buf_set_keymap(list_buf, "n", key, "", { noremap = true, silent = true })
   end
+  -- Block visual mode
+  for _, key in ipairs({ "v", "V", "<C-v>" }) do
+    vim.api.nvim_buf_set_keymap(list_buf, "n", key, "", { noremap = true, silent = true })
+  end
+  -- Escape from any non-normal mode back to normal
+  for _, mode in ipairs({ "i", "v", "x", "s" }) do
+    vim.api.nvim_buf_set_keymap(list_buf, mode, "<Esc>", "<Esc>", { noremap = true, silent = true })
+  end
+  -- Auto-exit non-normal modes when entering the list window
+  vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
+    buffer = list_buf,
+    callback = function()
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(list_buf) then return end
+        local mode = vim.api.nvim_get_mode().mode
+        if mode ~= "n" then
+          vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+        end
+      end)
+    end,
+  })
 
   -- The right window is whichever window remains (the original or next)
   -- Move to the right split
@@ -3171,7 +3269,7 @@ M.create_list_overview = function(opts)
   local ns = vim.api.nvim_create_namespace("list_overview")
 
   -- Forward declarations
-  local render_list, open_file, select_next, select_prev, close, refresh
+  local render_list, open_file, select_next, select_prev, close
   local open_from_cursor, setup_edit_buf_keymaps, cleanup_edit_buf_keymaps
 
   -- Augroup for edit buffer keymaps
@@ -3216,21 +3314,50 @@ M.create_list_overview = function(opts)
       end
     end, key_opts)
 
-    -- Handle mouse click on file list while in insert mode in the edit buffer
-    vim.keymap.set("i", "<LeftMouse>", function()
-      if is_closed then return end
+    vim.keymap.set({ "n", "i" }, "<C-Down>", function()
+      if not is_closed then select_next() end
+    end, key_opts)
+
+    vim.keymap.set({ "n", "i" }, "<C-Up>", function()
+      if not is_closed then select_prev() end
+    end, key_opts)
+
+    -- Handle mouse click on file list from the edit buffer (all modes)
+    local function handle_list_click_from_edit()
+      if is_closed then
+        local keys = vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true)
+        vim.api.nvim_feedkeys(keys, "ni", false)
+        return
+      end
       local mouse_pos = vim.fn.getmousepos()
       if mouse_pos.winid == list_win then
-        vim.cmd("stopinsert")
         vim.api.nvim_set_current_win(list_win)
         pcall(vim.api.nvim_win_set_cursor, list_win, { mouse_pos.line, 0 })
         open_from_cursor()
         return
       end
+      -- Click on a different window (e.g. opencode): switch directly to avoid feedkeys races
+      if mouse_pos.winid ~= 0 and vim.api.nvim_win_is_valid(mouse_pos.winid)
+         and mouse_pos.winid ~= edit_win then
+        vim.api.nvim_set_current_win(mouse_pos.winid)
+        pcall(vim.api.nvim_win_set_cursor, mouse_pos.winid, { mouse_pos.line, mouse_pos.column })
+        return
+      end
       -- Default behavior: feed the key back for normal mouse handling
       local keys = vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true)
       vim.api.nvim_feedkeys(keys, "ni", false)
-    end, key_opts)
+    end
+
+    -- Normal mode: handle directly
+    vim.keymap.set("n", "<LeftMouse>", handle_list_click_from_edit, key_opts)
+    -- Non-normal modes: escape first, then handle on next loop
+    for _, mode in ipairs({ "i", "v", "x", "s" }) do
+      vim.keymap.set(mode, "<LeftMouse>", function()
+        -- Force exit to normal mode
+        vim.cmd("normal! \27")
+        vim.schedule(handle_list_click_from_edit)
+      end, key_opts)
+    end
   end
 
   cleanup_edit_buf_keymaps = function()
@@ -3242,7 +3369,11 @@ M.create_list_overview = function(opts)
         pcall(vim.keymap.del, "n", "<M-r>", { buffer = buf })
         pcall(vim.keymap.del, "n", "<Tab>", { buffer = buf })
         pcall(vim.keymap.del, "n", "<C-h>", { buffer = buf })
-        pcall(vim.keymap.del, "i", "<LeftMouse>", { buffer = buf })
+        for _, mode in ipairs({ "n", "i", "v", "x", "s" }) do
+          pcall(vim.keymap.del, mode, "<C-Down>", { buffer = buf })
+          pcall(vim.keymap.del, mode, "<C-Up>", { buffer = buf })
+          pcall(vim.keymap.del, mode, "<LeftMouse>", { buffer = buf })
+        end
       end
     end
     mapped_bufs = {}
@@ -3294,9 +3425,15 @@ M.create_list_overview = function(opts)
 
     -- Apply highlights
     vim.api.nvim_buf_clear_namespace(list_buf, ns, 0, -1)
-    for i, hl_group in ipairs(line_highlights) do
-      if hl_group then
-        vim.api.nvim_buf_add_highlight(list_buf, ns, hl_group, i - 1, 0, -1)
+    for i, hl in ipairs(line_highlights) do
+      if hl then
+        if type(hl) == "string" then
+          vim.api.nvim_buf_add_highlight(list_buf, ns, hl, i - 1, 0, -1)
+        elseif type(hl) == "table" then
+          for _, seg in ipairs(hl) do
+            vim.api.nvim_buf_add_highlight(list_buf, ns, seg[1], i - 1, seg[2], seg[3])
+          end
+        end
       end
     end
   end
@@ -3307,18 +3444,41 @@ M.create_list_overview = function(opts)
     current_index = index
 
     local filepath = items[index]
-    if not vim.api.nvim_win_is_valid(edit_win) then return end
+
+    -- If the edit window is gone, create a new split to the right of the list
+    if not vim.api.nvim_win_is_valid(edit_win) then
+      if not vim.api.nvim_win_is_valid(list_win) then return end
+      vim.api.nvim_set_current_win(list_win)
+      vim.cmd("wincmd l")
+      local new_win = vim.api.nvim_get_current_win()
+      if new_win == list_win then
+        -- No window to the right, create one
+        vim.cmd("belowright vnew")
+        new_win = vim.api.nvim_get_current_win()
+      end
+      edit_win = new_win
+    end
 
     -- Open the file in the edit window (reuse existing buffer to avoid swap prompts)
     vim.api.nvim_set_current_win(edit_win)
+    -- Temporarily disable winfixbuf so we can switch buffers
+    local had_fixbuf = vim.wo[edit_win].winfixbuf
+    if had_fixbuf then vim.wo[edit_win].winfixbuf = false end
     local existing_buf = vim.fn.bufnr(filepath)
     if existing_buf ~= -1 then
       vim.api.nvim_win_set_buf(edit_win, existing_buf)
       -- nvim_win_set_buf doesn't trigger BufEnter, so set keymaps manually
       setup_edit_buf_keymaps(existing_buf)
+      -- Trigger BufEnter so gitsigns and other plugins attach properly
+      vim.api.nvim_exec_autocmds("BufEnter", { buffer = existing_buf })
     else
       vim.cmd("edit " .. vim.fn.fnameescape(filepath))
     end
+    if had_fixbuf then vim.wo[edit_win].winfixbuf = true end
+
+    -- Ensure edit window has line numbers and signcolumn for git indicators
+    vim.wo[edit_win].number = true
+    vim.wo[edit_win].signcolumn = "yes"
 
     -- Update the list highlighting
     render_list()
@@ -3355,6 +3515,16 @@ M.create_list_overview = function(opts)
     if is_closed then return end
     is_closed = true
 
+    -- Stop auto-refresh watchers and pending timer
+    stop_watchers()
+    if pending_timer then
+      if not pending_timer:is_closing() then
+        pending_timer:stop()
+        pending_timer:close()
+      end
+      pending_timer = nil
+    end
+
     -- Clean up keymaps from edit buffers
     cleanup_edit_buf_keymaps()
 
@@ -3383,6 +3553,10 @@ M.create_list_overview = function(opts)
   -- Refresh the list in-place (re-fetch data without closing windows)
   refresh = function()
     if is_closed or not on_refresh then return end
+
+    -- Save current file path before refresh
+    local prev_file = items[current_index]
+
     local new_opts = on_refresh()
     if not new_opts then return end
 
@@ -3411,9 +3585,21 @@ M.create_list_overview = function(opts)
 
     total_display_lines = use_grouped and #display_items or #items
 
-    -- Clamp current_index
-    if current_index > #items then
-      current_index = math.max(1, #items)
+    -- Restore cursor to the same file if it still exists
+    local restored = false
+    if prev_file then
+      for i, fp in ipairs(items) do
+        if fp == prev_file then
+          current_index = i
+          restored = true
+          break
+        end
+      end
+    end
+    if not restored then
+      if current_index > #items then
+        current_index = math.max(1, #items)
+      end
     end
 
     render_list()
@@ -3448,15 +3634,25 @@ M.create_list_overview = function(opts)
         vim.api.nvim_win_set_cursor(list_win, { cursor[1] - 1, 0 })
       end
     end },
-    -- Enter / mouse click opens the file under cursor
+    -- Enter opens the file under cursor
     { "n", "<CR>", open_from_cursor },
+    -- Mouse click: position cursor then open (normal mode)
+    { "n", "<LeftMouse>", function()
+      local keys = vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true)
+      vim.api.nvim_feedkeys(keys, "xn", false)
+      vim.schedule(function()
+        if not is_closed then
+          open_from_cursor()
+        end
+      end)
+    end },
     { "n", "<LeftRelease>", open_from_cursor },
     -- ] and [ navigate and open
     { "n", "]", select_next },
     { "n", "[", select_prev },
     -- Close
     { "n", "q", close },
-    { "n", "<Esc><Esc>", close },
+    { "n", "<Esc>", close },
     -- Refresh
     { "n", "<M-r>", refresh },
     -- Switch to edit window
@@ -3470,12 +3666,35 @@ M.create_list_overview = function(opts)
         vim.api.nvim_set_current_win(edit_win)
       end
     end },
+    { "n", "<C-Down>", select_next },
+    { "n", "<C-Up>", select_prev },
   }
 
   for _, km in ipairs(list_keymaps) do
     vim.api.nvim_buf_set_keymap(list_buf, km[1], km[2], "", {
       noremap = true, silent = true, callback = km[3],
     })
+  end
+
+  -- Mouse click on list buffer from any non-normal mode: escape to normal, then handle click
+  for _, mode in ipairs({ "v", "x", "s", "i" }) do
+    vim.keymap.set(mode, "<LeftMouse>", function()
+      -- Exit to normal mode first
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+      vim.schedule(function()
+        if is_closed then return end
+        local mouse_pos = vim.fn.getmousepos()
+        if mouse_pos.winid == list_win then
+          vim.api.nvim_set_current_win(list_win)
+          pcall(vim.api.nvim_win_set_cursor, list_win, { mouse_pos.line, 0 })
+          open_from_cursor()
+        else
+          -- Default mouse behavior
+          local keys = vim.api.nvim_replace_termcodes("<LeftMouse>", true, false, true)
+          vim.api.nvim_feedkeys(keys, "ni", false)
+        end
+      end)
+    end, { buffer = list_buf, noremap = true, silent = true })
   end
 
   -- When a new buffer is loaded in the edit window, set up keymaps
@@ -3498,15 +3717,74 @@ M.create_list_overview = function(opts)
     callback = function()
       if not is_closed then
         is_closed = true
+        stop_watchers()
+        if pending_timer then
+          if not pending_timer:is_closing() then
+            pending_timer:stop()
+            pending_timer:close()
+          end
+          pending_timer = nil
+        end
+        if poll_timer then
+          if not poll_timer:is_closing() then
+            poll_timer:stop()
+            poll_timer:close()
+          end
+          poll_timer = nil
+        end
         vim.api.nvim_del_augroup_by_id(augroup)
         if on_close then on_close() end
       end
     end,
   })
 
+  -- Auto-refresh: BufWritePost and FocusGained trigger refresh
+  if auto_refresh then
+    vim.api.nvim_create_autocmd({ "BufWritePost", "FocusGained" }, {
+      group = augroup,
+      callback = function()
+        if is_closed then return end
+        schedule_refresh()
+      end,
+    })
+
+    -- Periodic git status polling to detect external changes (e.g. opencode plugin)
+    local h = io.popen("git status --porcelain 2>/dev/null")
+    if h then
+      last_git_status = h:read("*a")
+      h:close()
+    end
+    poll_timer = vim.loop.new_timer()
+    if poll_timer then
+      poll_timer:start(2000, 2000, vim.schedule_wrap(function()
+        if is_closed then
+          if poll_timer and not poll_timer:is_closing() then
+            poll_timer:stop()
+            poll_timer:close()
+          end
+          return
+        end
+        local h2 = io.popen("git status --porcelain 2>/dev/null")
+        if h2 then
+          local current_status = h2:read("*a")
+          h2:close()
+          if current_status ~= last_git_status then
+            last_git_status = current_status
+            schedule_refresh()
+          end
+        end
+      end))
+    end
+  end
+
   -- Initial render and open first file
   render_list()
   open_file(1)
+
+  -- Start file watchers for auto-refresh
+  if auto_refresh and opts.watch_dirs then
+    start_watchers(opts.watch_dirs)
+  end
 
   -- Focus the edit window
   if vim.api.nvim_win_is_valid(edit_win) then

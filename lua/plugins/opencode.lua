@@ -12,55 +12,176 @@ return {
     },
   },
   config = function()
-    -- Auto-enter insert mode when opening opencode input window
-    -- Try multiple patterns since the filetype might vary
-    local opencode_filetypes = {
-      "opencode_input",
-      "opencode-input", 
-      "opencode",
-      "prompt"
-    }
-    
-    for _, ft in ipairs(opencode_filetypes) do
-      vim.api.nvim_create_autocmd("FileType", {
-        pattern = ft,
-        callback = function()
-          vim.schedule(function()
-            vim.cmd('startinsert')
-          end)
-        end,
-      })
+    -- Helper: check if a question dialog is currently active
+    local function question_active()
+      local ok, qw = pcall(require, 'opencode.ui.question_window')
+      return ok and qw.has_question and qw.has_question()
     end
-    
-    -- Also trigger on BufEnter for any opencode-related buffer
-    vim.api.nvim_create_autocmd("BufEnter", {
-      pattern = "*",
-      callback = function()
-        local bufname = vim.api.nvim_buf_get_name(0)
-        local ft = vim.bo.filetype
-        
-        -- Check if it's an opencode buffer by name or filetype
-        if bufname:match("opencode") or ft:match("opencode") or vim.bo.buftype == "prompt" then
-          -- Only enter insert mode if it looks like an input window (not output)
-          if not bufname:match("output") and not ft:match("output") then
-            vim.schedule(function()
-              if vim.api.nvim_get_mode().mode == 'n' then
+
+    -- Force insert mode in the opencode input buffer.
+    -- Uses ModeChanged to re-enter insert whenever something pulls us out,
+    -- unless explicitly suppressed (Esc double-tap to close).
+    vim.api.nvim_create_autocmd("FileType", {
+      pattern = "opencode",
+      callback = function(args)
+        local buf = args.buf
+        vim.bo[buf].modifiable = true
+
+        -- Re-enter insert mode whenever mode changes away from insert in this buffer
+        vim.api.nvim_create_autocmd("ModeChanged", {
+          buffer = buf,
+          callback = function()
+            if _G._opencode_suppress_insert then return end
+            if question_active() then return end
+            if not vim.api.nvim_buf_is_valid(buf) then return true end -- delete autocmd
+            local mode = vim.api.nvim_get_mode().mode
+            if mode ~= 'i' and vim.api.nvim_get_current_buf() == buf then
+              vim.bo[buf].modifiable = true
+              vim.schedule(function()
+                if vim.api.nvim_buf_is_valid(buf)
+                   and vim.api.nvim_get_current_buf() == buf
+                   and vim.api.nvim_get_mode().mode ~= 'i'
+                   and not _G._opencode_suppress_insert
+                   and not question_active() then
+                  vim.cmd('startinsert')
+                end
+              end)
+            end
+          end,
+        })
+
+        vim.schedule(function()
+          if vim.api.nvim_get_current_buf() == buf and not question_active() then
+            vim.cmd('startinsert')
+          end
+        end)
+      end,
+    })
+
+    vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
+      callback = function(args)
+        if vim.bo[args.buf].filetype == "opencode" and vim.api.nvim_get_current_buf() == args.buf and not question_active() then
+          vim.bo[args.buf].modifiable = true
+          if not _G._opencode_suppress_insert then
+            vim.defer_fn(function()
+              if vim.api.nvim_buf_is_valid(args.buf)
+                 and vim.api.nvim_get_current_buf() == args.buf
+                 and vim.bo[args.buf].filetype == "opencode"
+                 and vim.api.nvim_get_mode().mode ~= 'i'
+                 and not question_active()
+                 and not _G._opencode_suppress_insert then
+                vim.bo[args.buf].modifiable = true
                 vim.cmd('startinsert')
               end
-            end)
+            end, 50)
           end
         end
       end,
     })
-    
+
+    -- Auto-reload files changed on disk by opencode
+    vim.o.autoread = true
+    vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold" }, {
+      pattern = "*",
+      callback = function()
+        if vim.bo.buftype == "" then
+          vim.cmd('silent! checktime')
+        end
+      end,
+    })
+
+    -- Resize opencode floating windows (updates the ratio so VimResized preserves it)
+    local function resize_opencode(delta)
+      local oc_state = require('opencode.state')
+      local oc_config = require('opencode.config')
+      local windows = oc_state.windows
+      if not windows or not windows.output_win or not vim.api.nvim_win_is_valid(windows.output_win) then
+        return
+      end
+      local new_ratio = math.max(0.2, math.min(0.9, oc_config.ui.window_width + delta))
+      oc_config.ui.window_width = new_ratio
+      local width = math.floor(vim.o.columns * new_ratio)
+      pcall(vim.api.nvim_win_set_config, windows.output_win, { width = width })
+      if windows.input_win and vim.api.nvim_win_is_valid(windows.input_win) then
+        pcall(vim.api.nvim_win_set_config, windows.input_win, { width = width })
+      end
+    end
+
+    vim.api.nvim_create_autocmd("FileType", {
+      pattern = { "opencode", "opencode_output" },
+      callback = function(args)
+        local buf = args.buf
+        vim.keymap.set({ 'n', 'i' }, '<M-Left>', function() resize_opencode(-0.05) end,
+          { buffer = buf, desc = "Opencode: shrink width" })
+        vim.keymap.set({ 'n', 'i' }, '<M-Right>', function() resize_opencode(0.05) end,
+          { buffer = buf, desc = "Opencode: grow width" })
+      end,
+    })
+
+    -- Tab switching and clear input keymaps for opencode input window
+    vim.api.nvim_create_autocmd("FileType", {
+      pattern = "opencode",
+      callback = function(args)
+        local buf = args.buf
+
+        local function find_editor_win()
+          -- Try alternate window first (the window user was in before opencode)
+          local alt = vim.fn.win_getid(vim.fn.winnr('#'))
+          if alt ~= 0 and vim.api.nvim_win_is_valid(alt) then
+            local bt = vim.bo[vim.api.nvim_win_get_buf(alt)].buftype
+            if bt == "" then
+              return alt
+            end
+          end
+          -- Fallback: first window with buftype=""
+          for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+            local bt = vim.bo[vim.api.nvim_win_get_buf(win)].buftype
+            if bt == "" then
+              return win
+            end
+          end
+        end
+
+        local function cycle_editor_buf(cmd)
+          local editor_win = find_editor_win()
+          if not editor_win then return end
+          local current_win = vim.api.nvim_get_current_win()
+          -- Suppress all autocmds so BufEnter/WinEnter don't fire
+          local ei = vim.o.eventignore
+          vim.o.eventignore = 'all'
+          vim.api.nvim_set_current_win(editor_win)
+          vim.cmd(cmd)
+          vim.api.nvim_set_current_win(current_win)
+          vim.o.eventignore = ei
+          -- Restore insert mode in the input buffer
+          vim.cmd('startinsert')
+        end
+
+        -- <M-k> → switch editor to previous tab
+        vim.keymap.set({ 'n', 'i' }, '<M-k>', function()
+          cycle_editor_buf('BufferLineCyclePrev')
+        end, { buffer = buf, desc = "Opencode: switch editor to prev tab" })
+
+        -- <M-j> → switch editor to next tab
+        vim.keymap.set({ 'n', 'i' }, '<M-j>', function()
+          cycle_editor_buf('BufferLineCycleNext')
+        end, { buffer = buf, desc = "Opencode: switch editor to next tab" })
+
+        -- <C-d> → clear all text in input buffer
+        vim.keymap.set('i', '<C-d>', function()
+          vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes('<Esc>ggVG"_c', true, false, true), 'n', false)
+        end, { buffer = buf, desc = "Opencode: clear input" })
+      end,
+    })
+
     require("opencode").setup({
       -- Executable
-      opencode_executable = 'opencode',
+      opencode_executable = vim.fn.expand('~/.local/bin/opencode-wrapper'),
       
       -- Default settings
       default_mode = 'build',
       default_global_keymaps = true,
-      default_system_prompt = table.concat(vim.fn.readfile(vim.fn.expand('~/.config/nvim/assets/OPENCODE.md')), '\n'),
+      default_system_prompt = table.concat(vim.fn.readfile(vim.fn.expand('~/.config/nvim/opencode/OPENCODE.md')), '\n'),
       
       -- Custom Keymaps
       keymap = {
@@ -68,14 +189,13 @@ return {
           -- Main opencode toggle (opens in insert mode)
           ['<leader>o'] = { function()
             require('opencode.api').toggle()
-            -- Multiple attempts to enter insert mode with increasing delays
+            -- Enter insert mode after toggle, unless a question dialog is active
             for i = 1, 3 do
               vim.defer_fn(function()
-                local bufname = vim.api.nvim_buf_get_name(0)
-                if bufname:match("opencode") and not bufname:match("output") then
-                  if vim.api.nvim_get_mode().mode == 'n' then
-                    vim.cmd('startinsert')
-                  end
+                if question_active() then return end
+                local ft = vim.bo.filetype
+                if ft == "opencode" and vim.api.nvim_get_mode().mode == 'n' then
+                  vim.cmd('startinsert')
                 end
               end, i * 50)
             end
@@ -85,7 +205,9 @@ return {
           ['<leader>oi'] = { function()
             require('opencode.api').open_input()
             vim.defer_fn(function()
-              vim.cmd('startinsert')
+              if not question_active() then
+                vim.cmd('startinsert')
+              end
             end, 100)
           end },
           
@@ -109,8 +231,75 @@ return {
           ['<S-tab>'] = { 'switch_mode', mode = { 'n', 'i' } },
           
           -- Keep other useful defaults
-          ['<esc>'] = { 'close' },
-          ['<C-c>'] = { 'cancel' },
+          ['<esc>'] = { function()
+            local api = require('opencode.api')
+            local oc_state = require('opencode.state')
+            local now = vim.uv.now()
+            -- Suppress auto-insert so Esc actually works
+            _G._opencode_suppress_insert = true
+            if _G._opencode_last_esc and (now - _G._opencode_last_esc) < 300 then
+              -- Double Esc: stop if running, then close the window
+              _G._opencode_last_esc = nil
+              if oc_state.is_running() then
+                api.cancel()
+                oc_state.job_count = 0
+              end
+              api.close()
+              -- Clear suppress after close
+              vim.defer_fn(function() _G._opencode_suppress_insert = false end, 100)
+            else
+              _G._opencode_last_esc = now
+              -- Single Esc: stop execution if running
+              if oc_state.is_running() then
+                api.cancel()
+                -- Force-clear stuck "Thinking..." after a short delay
+                -- (covers cases where abort_session hangs or job_count leaks)
+                vim.defer_fn(function()
+                  if oc_state.is_running() then
+                    oc_state.job_count = 0
+                  end
+                end, 2000)
+              end
+              -- Re-enable auto-insert after the double-esc window (300ms) expires
+              vim.defer_fn(function()
+                _G._opencode_suppress_insert = false
+                -- Re-enter insert mode if still in the input buffer
+                if vim.bo.filetype == "opencode" and vim.api.nvim_get_mode().mode ~= 'i' and not question_active() then
+                  vim.cmd('startinsert')
+                end
+              end, 350)
+            end
+          end, mode = { 'n', 'i' } },
+          -- Scroll output window from input
+          ['<PageUp>'] = { function()
+            local oc_state = require('opencode.state')
+            local win = oc_state.windows and oc_state.windows.output_win
+            if win and vim.api.nvim_win_is_valid(win) then
+              local height = vim.api.nvim_win_get_height(win)
+              vim.api.nvim_win_call(win, function()
+                vim.cmd('normal! ' .. height .. 'k')
+              end)
+            end
+          end, mode = { 'n', 'i' } },
+          ['<PageDown>'] = { function()
+            local oc_state = require('opencode.state')
+            local win = oc_state.windows and oc_state.windows.output_win
+            if win and vim.api.nvim_win_is_valid(win) then
+              local height = vim.api.nvim_win_get_height(win)
+              vim.api.nvim_win_call(win, function()
+                vim.cmd('normal! ' .. height .. 'j')
+              end)
+            end
+          end, mode = { 'n', 'i' } },
+          ['<End>'] = { function()
+            local oc_state = require('opencode.state')
+            local win = oc_state.windows and oc_state.windows.output_win
+            if win and vim.api.nvim_win_is_valid(win) then
+              vim.api.nvim_win_call(win, function()
+                vim.cmd('normal! G')
+              end)
+            end
+          end, mode = { 'n', 'i' } },
           ['~'] = { 'mention_file', mode = 'i' },
           ['@'] = { 'mention', mode = 'i' },
           ['/'] = { 'slash_commands', mode = 'i' },
@@ -127,7 +316,7 @@ return {
       -- UI Configuration
       ui = {
         position = 'right',
-        window_width = 0.40,
+        window_width = 0.45,
         zoom_width = 0.8,
         display_model = true,
         display_context_size = true,
@@ -162,8 +351,18 @@ return {
         level = 'debug',
       },
       debug = {
-        enabled = true,
+        enabled = false,
       },
     })
+
+    -- Suppress orphan part warnings from opencode renderer.
+    -- These fire when message.part.updated events arrive before their parent message.
+    local orig_notify = vim.notify
+    vim.notify = function(msg, level, opts)
+      if type(msg) == 'string' and msg:match('^Could not find message for part:') then
+        return
+      end
+      return orig_notify(msg, level, opts)
+    end
   end,
 }
