@@ -59,6 +59,7 @@ keymap.bind("n", "<leader>gd", git.review_changes) -- Git diff overview
 
 -- Git conflict resolution
 keymap.bind("n", "<leader>gm", git.resolve_conflicts) -- Resolve merge conflicts
+keymap.bind("n", "<leader>gc", git.resolve_conflicts) -- Git conflicts picker
 
 -- Edit history navigation (jump between edit locations across files)
 vim.keymap.set("n", "<C-j>", navigation.go_back, { noremap = true, silent = true, desc = "Go to previous edit location" })
@@ -67,7 +68,7 @@ vim.keymap.set("n", "<leader>nh", navigation.show_history, { noremap = true, sil
 vim.keymap.set("n", "<leader>nc", navigation.clear_history, { noremap = true, silent = true, desc = "Clear edit history" })
 
 -- Terry assistant
-vim.keymap.set("n", "<leader>a", function() require("terry").toggle() end, { noremap = true, silent = true, desc = "Toggle Terry assistant" })
+vim.keymap.set("n", "<leader>ta", function() require("terry").toggle() end, { noremap = true, silent = true, desc = "Toggle Terry assistant" })
 
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component

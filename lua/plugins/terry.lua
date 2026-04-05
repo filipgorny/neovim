@@ -8,7 +8,7 @@ return {
       token = "",
       persona = "Terry",
       system_prompt_file = vim.fn.expand("~/.config/nvim/terry/TERRY.md"),
-      start_command = "",
+      start_command = "cd " .. vim.fn.expand("~/Projects/filipgorny/assistant") .. " && ./bin/engine -config config.yaml",
       ui = {
         width = 0.40,
         input_min_height = 0.10,
@@ -17,6 +17,6 @@ return {
     })
   end,
   keys = {
-    { "<leader>a", function() require("terry").toggle() end, desc = "Toggle Terry assistant" },
+    { "<leader>ta", function() require("terry").toggle() end, desc = "Toggle Terry assistant" },
   },
 }

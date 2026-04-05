@@ -9,7 +9,7 @@ local previewers = require("telescope.previewers")
 
 -- Funkcja parsująca git status
 local function parse_git_status()
-  local handle = io.popen("git status --porcelain")
+  local handle = io.popen("git status --porcelain -uall")
   if not handle then return {} end
 
   local entries = {}
@@ -19,20 +19,7 @@ local function parse_git_status()
     local filename = line:sub(4)
 
     if staged_char == "?" and unstaged_char == "?" then
-      if filename:sub(-1) == "/" then
-        -- Untracked directory: expand to individual files
-        local ls_handle = io.popen("git ls-files --others --exclude-standard -- " .. vim.fn.shellescape(filename) .. " 2>/dev/null")
-        if ls_handle then
-          for file_line in ls_handle:lines() do
-            if file_line ~= "" then
-              table.insert(entries, { type = "?", staged = false, filename = file_line })
-            end
-          end
-          ls_handle:close()
-        end
-      else
-        table.insert(entries, { type = "?", staged = false, filename = filename })
-      end
+      table.insert(entries, { type = "?", staged = false, filename = filename })
     else
       if staged_char ~= " " and (staged_char == "M" or staged_char == "D" or staged_char == "A" or staged_char == "R") then
         table.insert(entries, { type = staged_char, staged = true, filename = filename })
