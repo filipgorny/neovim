@@ -21,7 +21,7 @@ keymap.bind_for_all("<C-s>", function()
 end)
 
 -- Reload configuration
-keymap.bind("n", "<leader>c", configuration.reload_config)
+keymap.bind("n", "<leader>rc", configuration.reload_config)
 
 keymap.bind("n", "<S-q>", function()
   local bufnr = vim.api.nvim_get_current_buf()
@@ -72,6 +72,9 @@ vim.keymap.set("n", "<leader>ta", function() require("terry").toggle() end, { no
 
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
+
+-- Scripts menu (~/.config/nvim/scripts/)
+keymap.bind("n", "<leader>x", require("utils.scripts").pick)
 
 -- Debugging keybindings (using function keys)
 local dap = require("dap")
