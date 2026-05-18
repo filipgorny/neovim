@@ -319,6 +319,8 @@ return {
               ["<c-x>"] = "clear_filter",
               ["[g"] = "prev_git_modified",
               ["]g"] = "next_git_modified",
+              ["]"] = { "jump_in_nesting", nowait = false },
+              ["["] = { "jump_out_nesting", nowait = false },
               ["o"] = {
                 "show_help",
                 nowait = false,
@@ -384,6 +386,35 @@ return {
           },
 
           commands = {
+            jump_in_nesting = function(state)
+              local node = state.tree:get_node()
+              if not node then return end
+              local current_depth = node:get_depth()
+              local current_line = vim.api.nvim_win_get_cursor(0)[1]
+              local total_lines = vim.api.nvim_buf_line_count(0)
+              for lnum = current_line + 1, total_lines do
+                local n = state.tree:get_node(lnum)
+                if n then
+                  local d = n:get_depth()
+                  if d > current_depth then
+                    require("neo-tree.ui.renderer").focus_node(state, n:get_id())
+                    return
+                  elseif d <= current_depth then
+                    return
+                  end
+                end
+              end
+            end,
+
+            jump_out_nesting = function(state)
+              local node = state.tree:get_node()
+              if not node then return end
+              local parent_id = node:get_parent_id()
+              if parent_id then
+                require("neo-tree.ui.renderer").focus_node(state, parent_id)
+              end
+            end,
+
             toggle_favorite = function(state)
               local node = state.tree:get_node()
               local path = node:get_id()
