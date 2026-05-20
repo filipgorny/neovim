@@ -54,8 +54,9 @@ vim.keymap.set("n", "<S-[>", git.prev_hunk, { noremap = true, silent = true, des
 -- Git branch switching with session management
 keymap.bind("n", "<leader>gb", git.switch_branch) -- Switch git branch with auto-save/stash/session
 
--- Git diff overview (file list + editable buffer)
-keymap.bind("n", "<leader>gd", git.review_changes) -- Git diff overview
+-- Git diff overview vs base branch (dev → main fallback), committed changes only
+keymap.bind("n", "<leader>gd", git.review_branch_diff) -- Branch diff vs dev/main
+keymap.bind("n", "<leader>gD", git.reset_branch_diff_signs) -- Clear branch-diff line highlights
 
 -- Git conflict resolution
 keymap.bind("n", "<leader>gm", git.resolve_conflicts) -- Resolve merge conflicts
