@@ -70,6 +70,9 @@ vim.keymap.set("n", "<leader>nc", navigation.clear_history, { noremap = true, si
 -- Terry assistant
 vim.keymap.set("n", "<leader>ta", function() require("terry").toggle() end, { noremap = true, silent = true, desc = "Toggle Terry assistant" })
 
+-- AI Writer (Ollama-backed, model configurable in utils/ai_writer.lua)
+keymap.bind("n", "<leader>a", function() require("utils.ai_writer").open() end)
+
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
 
