@@ -533,9 +533,9 @@ local function apply_diff_marks_to_buf(buf)
 end
 
 local function ensure_diff_highlight_groups()
-  vim.api.nvim_set_hl(0, "BranchDiffAdd",    { bg = "#1c2e1c" })
-  vim.api.nvim_set_hl(0, "BranchDiffChange", { bg = "#2e2a1a" })
-  vim.api.nvim_set_hl(0, "BranchDiffDelete", { bg = "#2e1c1c" })
+  vim.api.nvim_set_hl(0, "BranchDiffAdd",    { bg = "#235f33" })
+  vim.api.nvim_set_hl(0, "BranchDiffChange", { bg = "#5f4f23" })
+  vim.api.nvim_set_hl(0, "BranchDiffDelete", { bg = "#5f2929" })
 end
 
 local function apply_branch_diff_signs(base)

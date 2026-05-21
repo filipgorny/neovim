@@ -530,6 +530,23 @@ return {
           vim.cmd("Neotree show")
         end
       end)
+
+      -- Auto-open Neotree when nvim is started with a directory argument
+      -- (e.g. `nvim .`, `nvim some/folder`). Replaces the default netrw view.
+      vim.api.nvim_create_autocmd("VimEnter", {
+        callback = function()
+          if vim.fn.argc() ~= 1 then return end
+          local arg = vim.fn.argv(0)
+          local stat = vim.uv and vim.uv.fs_stat(arg) or vim.loop.fs_stat(arg)
+          if not stat or stat.type ~= "directory" then return end
+
+          -- Wipe the directory "buffer" netrw created so nvim doesn't keep it
+          local dir_buf = vim.api.nvim_get_current_buf()
+          vim.cmd.cd(arg)
+          vim.cmd("Neotree show reveal_force_cwd dir=" .. vim.fn.fnameescape(arg))
+          pcall(vim.api.nvim_buf_delete, dir_buf, { force = true })
+        end,
+      })
     end,
   },
 

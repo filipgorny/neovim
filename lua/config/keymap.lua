@@ -68,9 +68,6 @@ vim.keymap.set("n", "<C-k>", navigation.go_forward, { noremap = true, silent = t
 vim.keymap.set("n", "<leader>nh", navigation.show_history, { noremap = true, silent = true, desc = "Show edit history" })
 vim.keymap.set("n", "<leader>nc", navigation.clear_history, { noremap = true, silent = true, desc = "Clear edit history" })
 
--- Terry assistant
-vim.keymap.set("n", "<leader>ta", function() require("terry").toggle() end, { noremap = true, silent = true, desc = "Toggle Terry assistant" })
-
 -- Code generators
 keymap.bind("n", "<leader>gr", function() generator.run("react-component") end) -- Generate React component
 
