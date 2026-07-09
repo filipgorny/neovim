@@ -255,6 +255,375 @@ M.review_changes = function()
   })
 end
 
+-- Pick base branch for branch-diff: prefer local `dev`, then `origin/dev`,
+-- then local `main`, then `origin/main`. Returns nil if none exists.
+local function get_branch_diff_base()
+  for _, ref in ipairs({ "dev", "origin/dev", "main", "origin/main" }) do
+    local h = io.popen(string.format("git rev-parse --verify --quiet %s 2>/dev/null", ref))
+    if h then
+      local out = h:read("*l")
+      h:close()
+      if out and out ~= "" then
+        return ref
+      end
+    end
+  end
+  return nil
+end
+
+-- Build branch-diff data: committed changes on this branch vs merge-base with `base`.
+-- Three-dot range ignores changes that landed on `base` after we branched.
+local function build_branch_diff_data(base)
+  local git_root = vim.fn.systemlist("git rev-parse --show-toplevel")[1] or ""
+  local range = base .. "..."
+
+  local numstat = {}
+  local nh = io.popen(string.format("git diff --numstat %s 2>/dev/null", range))
+  if nh then
+    for line in nh:lines() do
+      local added, removed, file = line:match("^(%d+)%s+(%d+)%s+(.+)$")
+      if added and removed and file then
+        -- Rename line looks like "old => new" inside the path; keep raw for now,
+        -- name-status pass below will normalize.
+        numstat[file] = { added = tonumber(added) or 0, removed = tonumber(removed) or 0 }
+      end
+    end
+    nh:close()
+  end
+
+  local entries = {}
+  local sh = io.popen(string.format("git diff --name-status %s 2>/dev/null", range))
+  if sh then
+    for line in sh:lines() do
+      local status = line:sub(1, 1)
+      if status == "R" or status == "C" then
+        -- "R100\told\tnew" — take the new path
+        local _, _, new = line:match("^(%a)%d*%s+(%S+)%s+(.+)$")
+        if new then
+          table.insert(entries, { type = "M", filename = new })
+        end
+      else
+        local file = line:match("^%a+%s+(.+)$")
+        if file and (status == "M" or status == "A" or status == "D") then
+          table.insert(entries, { type = status, filename = file })
+        end
+      end
+    end
+    sh:close()
+  end
+
+  if #entries == 0 then return nil end
+
+  local file_paths = {}
+  local file_info = {}
+  local seen = {}
+  for _, entry in ipairs(entries) do
+    if not seen[entry.filename] and entry.type ~= "D" then
+      seen[entry.filename] = true
+      local full_path = git_root .. "/" .. entry.filename
+      table.insert(file_paths, full_path)
+
+      local stat = numstat[entry.filename]
+      local changes = stat and (stat.added + stat.removed) or 0
+      local total_lines = 0
+
+      if vim.fn.filereadable(full_path) == 1 then
+        local wc = vim.fn.system("wc -l < " .. vim.fn.shellescape(full_path))
+        total_lines = tonumber(vim.trim(wc)) or 0
+      end
+
+      if changes == 0 and entry.type == "A" then
+        changes = total_lines
+      end
+
+      local change_pct = 0
+      if total_lines > 0 then
+        change_pct = (changes / total_lines) * 100
+      end
+
+      file_info[full_path] = {
+        type = entry.type,
+        filename = entry.filename,
+        changes = changes,
+        change_pct = change_pct,
+      }
+    end
+  end
+
+  local dir_files = {}
+  local dir_changes = {}
+  for _, fp in ipairs(file_paths) do
+    local info = file_info[fp]
+    local dir = vim.fn.fnamemodify(info.filename, ":h")
+    if dir == "." then dir = "" end
+    if not dir_files[dir] then
+      dir_files[dir] = {}
+      dir_changes[dir] = 0
+    end
+    table.insert(dir_files[dir], fp)
+    dir_changes[dir] = dir_changes[dir] + info.changes
+  end
+
+  local dirs = {}
+  for dir, _ in pairs(dir_files) do
+    table.insert(dirs, dir)
+  end
+  table.sort(dirs, function(a, b) return dir_changes[a] > dir_changes[b] end)
+
+  for _, dir in ipairs(dirs) do
+    table.sort(dir_files[dir], function(a, b)
+      return file_info[a].changes > file_info[b].changes
+    end)
+  end
+
+  local display_items = {}
+  file_paths = {}
+  for _, dir in ipairs(dirs) do
+    if #dir_files[dir] > 0 then
+      table.insert(display_items, { is_header = true, dir = dir })
+      for _, fp in ipairs(dir_files[dir]) do
+        table.insert(display_items, { is_header = false, path = fp })
+        table.insert(file_paths, fp)
+      end
+    end
+  end
+
+  local function format_display(display_item)
+    if display_item.is_header then
+      local dir_display = display_item.dir
+      if dir_display == "" then
+        dir_display = "./"
+      else
+        dir_display = dir_display:gsub("^src/", "")
+        dir_display = dir_display .. "/"
+      end
+      return " " .. dir_display
+    else
+      local info = file_info[display_item.path]
+      local filename = vim.fn.fnamemodify(info.filename, ":t")
+      local icon = ""
+      local ok, devicons = pcall(require, "nvim-web-devicons")
+      if ok then
+        local ic = devicons.get_icon(filename)
+        if ic then icon = ic .. " " end
+      end
+      local prefix = "  " .. icon
+      display_item.icon_end_byte = #prefix
+      return prefix .. filename
+    end
+  end
+
+  local function highlight_display(display_item, file_index)
+    if display_item.is_header then
+      local icon_bytes = #(" ")
+      return {
+        { "ListOverviewFolderIcon", 0, icon_bytes },
+        { "ListOverviewDirHeader", icon_bytes, -1 },
+      }
+    end
+    if file_index and file_index == "selected" then
+      return "ListOverviewSelected"
+    end
+    local info = file_info[display_item.path]
+    local file_hl
+    if info.type == "A" then
+      file_hl = "ListOverviewNew"
+    elseif info.change_pct > 20 then
+      file_hl = "ListOverviewHeavy"
+    else
+      file_hl = "ListOverviewModified"
+    end
+    local icon_end = display_item.icon_end_byte or 2
+    return {
+      { "ListOverviewIcon", 2, icon_end },
+      { file_hl, icon_end, -1 },
+    }
+  end
+
+  return {
+    items = file_paths,
+    display_items = display_items,
+    format_display = format_display,
+    highlight_display = highlight_display,
+  }
+end
+
+-- Branch-diff line highlights via our own extmarks (independent of gitsigns,
+-- so they persist after the panel closes).
+local diff_ns = vim.api.nvim_create_namespace("branch_diff_lines")
+local active_base = nil
+local diff_augroup_name = "BranchDiffHighlights"
+
+local function parse_hunks(base, rel_path)
+  local cmd = string.format(
+    "git diff --no-color -U0 %s... -- %s 2>/dev/null",
+    base, vim.fn.shellescape(rel_path)
+  )
+  local handle = io.popen(cmd)
+  if not handle then return {} end
+
+  local hunks = {}
+  for line in handle:lines() do
+    local _, old_count, new_start, new_count =
+      line:match("^@@%s+%-(%d+),?(%d*)%s+%+(%d+),?(%d*)%s+@@")
+    if new_start then
+      old_count = (old_count == "" or old_count == nil) and 1 or tonumber(old_count)
+      new_count = (new_count == "" or new_count == nil) and 1 or tonumber(new_count)
+      new_start = tonumber(new_start)
+
+      local hunk_type
+      if old_count == 0 then
+        hunk_type = "add"
+      elseif new_count == 0 then
+        hunk_type = "delete"
+      else
+        hunk_type = "change"
+      end
+
+      table.insert(hunks, {
+        type = hunk_type,
+        start = new_start,
+        count = math.max(1, new_count),
+      })
+    end
+  end
+  handle:close()
+  return hunks
+end
+
+local function apply_diff_marks_to_buf(buf)
+  if not active_base then return end
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+
+  local filepath = vim.api.nvim_buf_get_name(buf)
+  if filepath == "" then return end
+
+  vim.api.nvim_buf_clear_namespace(buf, diff_ns, 0, -1)
+
+  local git_root = vim.fn.systemlist("git rev-parse --show-toplevel")[1]
+  if not git_root or git_root == "" then return end
+  if filepath:sub(1, #git_root) ~= git_root then return end
+  local rel = filepath:sub(#git_root + 2)
+
+  local hunks = parse_hunks(active_base, rel)
+  local total = vim.api.nvim_buf_line_count(buf)
+
+  for _, hunk in ipairs(hunks) do
+    local hl_group
+    if hunk.type == "add" then
+      hl_group = "BranchDiffAdd"
+    elseif hunk.type == "change" then
+      hl_group = "BranchDiffChange"
+    else
+      hl_group = "BranchDiffDelete"
+    end
+
+    -- For pure deletions, mark the line where the deletion happened
+    -- (new_start points to the line BEFORE which deletion occurred in unified diff).
+    local first_line = math.max(0, hunk.start - 1)
+    for i = 0, hunk.count - 1 do
+      local line = first_line + i
+      if line < total then
+        pcall(vim.api.nvim_buf_set_extmark, buf, diff_ns, line, 0, {
+          line_hl_group = hl_group,
+        })
+      end
+    end
+  end
+end
+
+local function ensure_diff_highlight_groups()
+  vim.api.nvim_set_hl(0, "BranchDiffAdd",    { bg = "#235f33" })
+  vim.api.nvim_set_hl(0, "BranchDiffChange", { bg = "#5f4f23" })
+  vim.api.nvim_set_hl(0, "BranchDiffDelete", { bg = "#5f2929" })
+end
+
+local function apply_branch_diff_signs(base)
+  active_base = base
+  vim.g.branch_diff_signs_base = base
+
+  ensure_diff_highlight_groups()
+
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) then
+      apply_diff_marks_to_buf(buf)
+    end
+  end
+
+  local group = vim.api.nvim_create_augroup(diff_augroup_name, { clear = true })
+  -- BufEnter is the broadest hook (fires on :bnext, picker selection, manual
+  -- nvim_exec_autocmds from the panel). BufReadPost/BufWritePost catch
+  -- first-load and post-save respectively.
+  vim.api.nvim_create_autocmd({ "BufEnter", "BufReadPost", "BufWritePost" }, {
+    group = group,
+    callback = function(args)
+      vim.schedule(function()
+        apply_diff_marks_to_buf(args.buf)
+      end)
+    end,
+  })
+  -- Re-apply highlight groups after colorscheme changes
+  vim.api.nvim_create_autocmd("ColorScheme", {
+    group = group,
+    callback = ensure_diff_highlight_groups,
+  })
+end
+
+-- Public: clear branch-diff line highlights and stop the auto-apply hook.
+M.reset_branch_diff_signs = function()
+  active_base = nil
+  vim.g.branch_diff_signs_base = nil
+  pcall(vim.api.nvim_del_augroup_by_name, diff_augroup_name)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_clear_namespace(buf, diff_ns, 0, -1)
+    end
+  end
+  vim.notify("Branch-diff highlights: off", vim.log.levels.INFO)
+end
+
+-- Public: review changes on this branch vs `dev` (fallback `main`),
+-- limited to committed changes (uses `<base>...HEAD` three-dot range).
+M.review_branch_diff = function()
+  local ui = require("utils.ui")
+
+  local base = get_branch_diff_base()
+  if not base then
+    vim.notify("Nie znaleziono brancha 'dev' ani 'main'", vim.log.levels.WARN)
+    return
+  end
+
+  -- Switch gitsigns to use base branch as reference + dim line-bg highlights.
+  -- Stays active after panel closes; reset with M.reset_branch_diff_signs().
+  apply_branch_diff_signs(base)
+
+  local data = build_branch_diff_data(base)
+  if not data then
+    vim.notify(string.format("Brak commitów różniących HEAD od '%s'", base), vim.log.levels.INFO)
+    return
+  end
+
+  vim.api.nvim_set_hl(0, "ListOverviewNew", { fg = "#73c991" })
+  vim.api.nvim_set_hl(0, "ListOverviewModified", { fg = "#cca700" })
+  vim.api.nvim_set_hl(0, "ListOverviewHeavy", { fg = "#ffcc00", bold = true })
+  vim.api.nvim_set_hl(0, "ListOverviewDirHeader", { fg = "#888888", bold = true })
+  vim.api.nvim_set_hl(0, "ListOverviewIcon", { fg = "#ffffff" })
+  local normal_hl = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  vim.api.nvim_set_hl(0, "ListOverviewFolderIcon", { fg = normal_hl.fg })
+
+  ui.create_list_overview({
+    items = data.items,
+    title_left = string.format(" Diff vs %s ", base),
+    display_items = data.display_items,
+    format_display = data.format_display,
+    highlight_display = data.highlight_display,
+    on_refresh = function() return build_branch_diff_data(base) end,
+    auto_refresh = false,
+    -- Wyczyść line-highlighty po zamknięciu panelu.
+    on_close = M.reset_branch_diff_signs,
+  })
+end
+
 -- Navigate to next git hunk/change
 M.next_hunk = function()
   if vim.wo.diff then

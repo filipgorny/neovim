@@ -46,9 +46,13 @@ return {
 
     bufferline.setup(opts)
 
-    -- Re-sort tabs when switching buffers
+    -- Re-sort tabs when switching buffers.
+    -- Skip for unlisted / special buffers (e.g. our overlay panels) — bufferline
+    -- then has no components to sort and prints "Unable to find elements to sort".
     vim.api.nvim_create_autocmd("BufEnter", {
-      callback = function()
+      callback = function(args)
+        if not vim.bo[args.buf].buflisted then return end
+        if vim.bo[args.buf].buftype ~= "" then return end
         vim.schedule(function()
           pcall(function()
             bufferline.sort_by("custom")

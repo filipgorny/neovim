@@ -3196,10 +3196,12 @@ M.create_list_overview = function(opts)
     end
   end
 
-  -- Create the file list buffer (scratch, nofile)
+  -- Create the file list buffer (scratch, nofile, unlisted so bufferline/
+  -- tab-pickers ignore it)
   local list_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(list_buf, "buftype", "nofile")
   vim.api.nvim_buf_set_option(list_buf, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(list_buf, "buflisted", false)
   vim.api.nvim_buf_set_option(list_buf, "swapfile", false)
   vim.api.nvim_buf_set_option(list_buf, "filetype", "list_overview")
 
@@ -3212,26 +3214,59 @@ M.create_list_overview = function(opts)
   local list_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(list_win, list_buf)
 
-  -- Set left window width to 25% of available space (excluding opencode panel)
-  local total_width = vim.o.columns
-  local oc_width = 0
-  local ok_oc, oc_state = pcall(require, 'opencode.state')
-  if ok_oc and oc_state.windows and oc_state.windows.output_win
-     and vim.api.nvim_win_is_valid(oc_state.windows.output_win) then
-    oc_width = vim.api.nvim_win_get_width(oc_state.windows.output_win)
+  -- Width: percentage of available columns (excluding opencode panel),
+  -- so panel scales when terminal is resized / fullscreened.
+  -- User can drag the split with the mouse — we capture the new ratio
+  -- and re-apply it on VimResized.
+  local function compute_available_width()
+    local total_width = vim.o.columns
+    local oc_width = 0
+    local ok_oc, oc_state = pcall(require, 'opencode.state')
+    if ok_oc and oc_state.windows and oc_state.windows.output_win
+       and vim.api.nvim_win_is_valid(oc_state.windows.output_win) then
+      oc_width = vim.api.nvim_win_get_width(oc_state.windows.output_win)
+    end
+    return total_width - oc_width
   end
-  local available_width = total_width - oc_width
-  local list_width = math.floor(available_width * 0.25)
-  vim.api.nvim_win_set_width(list_win, list_width)
 
-  -- List window options
+  local width_ratio = opts.width_ratio or 0.33
+  local available_width = compute_available_width()
+  vim.api.nvim_win_set_width(list_win, math.floor(available_width * width_ratio))
+
+  -- List window options. winfixwidth=false so mouse drag on the split
+  -- divider resizes the panel naturally.
   vim.api.nvim_win_set_option(list_win, "number", false)
   vim.api.nvim_win_set_option(list_win, "relativenumber", false)
   vim.api.nvim_win_set_option(list_win, "signcolumn", "no")
   vim.api.nvim_win_set_option(list_win, "cursorline", false)  -- We handle highlighting ourselves
-  vim.api.nvim_win_set_option(list_win, "winfixwidth", true)
+  vim.api.nvim_win_set_option(list_win, "winfixwidth", false)
   vim.api.nvim_win_set_option(list_win, "wrap", false)
   vim.api.nvim_win_set_option(list_win, "statusline", title_left)
+
+  -- Track user resizes (mouse drag) to update the ratio
+  local resize_augroup = vim.api.nvim_create_augroup(
+    "ListOverviewResize_" .. list_buf, { clear = true }
+  )
+  vim.api.nvim_create_autocmd("WinResized", {
+    group = resize_augroup,
+    callback = function()
+      if not vim.api.nvim_win_is_valid(list_win) then return end
+      local new_w = vim.api.nvim_win_get_width(list_win)
+      local avail = compute_available_width()
+      if avail > 0 and new_w >= 10 then
+        width_ratio = new_w / avail
+      end
+    end,
+  })
+  -- Re-apply percentage on terminal resize / fullscreen toggle
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = resize_augroup,
+    callback = function()
+      if not vim.api.nvim_win_is_valid(list_win) then return end
+      local avail = compute_available_width()
+      vim.api.nvim_win_set_width(list_win, math.max(10, math.floor(avail * width_ratio)))
+    end,
+  })
 
   -- Force list buffer to always stay in normal mode
   -- Block keys that enter insert mode
@@ -3528,8 +3563,9 @@ M.create_list_overview = function(opts)
     -- Clean up keymaps from edit buffers
     cleanup_edit_buf_keymaps()
 
-    -- Clean up augroup
+    -- Clean up augroups
     pcall(vim.api.nvim_del_augroup_by_id, augroup)
+    pcall(vim.api.nvim_del_augroup_by_id, resize_augroup)
 
     -- Clean up list buffer/window
     if vim.api.nvim_win_is_valid(list_win) then
@@ -3653,6 +3689,7 @@ M.create_list_overview = function(opts)
     -- Close
     { "n", "q", close },
     { "n", "<Esc>", close },
+    { "n", "<Esc><Esc>", close },
     -- Refresh
     { "n", "<M-r>", refresh },
     -- Switch to edit window
