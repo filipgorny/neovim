@@ -58,6 +58,28 @@ return {
 
       vim.api.nvim_set_hl(0, "NeoTreeFavorite", { fg = "#e2b714" })
 
+      -- Wyróżnij niezakomitowane pliki w drzewku (nazwy kolorowane wg statusu gita).
+      -- Motywy często nie definiują grup NeoTreeGit*, więc ustawiamy je jawnie
+      -- i odświeżamy po każdej zmianie colorscheme.
+      local function set_git_highlights()
+        vim.api.nvim_set_hl(0, "NeoTreeGitModified", { fg = "#e0af68", bold = true })
+        vim.api.nvim_set_hl(0, "NeoTreeGitUntracked", { fg = "#9ece6a", bold = true, italic = true })
+        vim.api.nvim_set_hl(0, "NeoTreeGitAdded", { fg = "#9ece6a", bold = true })
+        vim.api.nvim_set_hl(0, "NeoTreeGitStaged", { fg = "#73daca", bold = true })
+        vim.api.nvim_set_hl(0, "NeoTreeGitRenamed", { fg = "#7aa2f7", bold = true })
+        vim.api.nvim_set_hl(0, "NeoTreeGitDeleted", { fg = "#f7768e", bold = true })
+        vim.api.nvim_set_hl(0, "NeoTreeGitConflict", { fg = "#f7768e", bold = true, undercurl = true })
+        -- Zakomitowane, ale różne od brancha bazowego — subtelniejsze niż zmiany w working tree
+        vim.api.nvim_set_hl(0, "NeoTreeBranchDiff", { fg = "#b8975a" })
+      end
+
+      set_git_highlights()
+
+      vim.api.nvim_create_autocmd("ColorScheme", {
+        group = vim.api.nvim_create_augroup("NeoTreeGitHighlights", { clear = true }),
+        callback = set_git_highlights,
+      })
+
       require("neo-tree").setup({
         open_on_setup = false,
         close_if_last_window = false, -- Close Neo-tree if it is the last window left in the tab
@@ -97,6 +119,46 @@ return {
                 virt_lines_above = true,
                 virt_lines = virt_lines,
               })
+            end,
+          },
+          {
+            event = "after_render",
+            handler = function(state)
+              if state.name ~= "filesystem" then return end
+              local buf = state.bufnr
+              if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+              if not state.tree then return end
+
+              local ns = vim.api.nvim_create_namespace("neo_tree_branch_diff")
+              vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+
+              local diff = require("utils.branch_diff").get_files()
+              if vim.tbl_isempty(diff) then return end
+
+              for l = 1, vim.api.nvim_buf_line_count(buf) do
+                local ok, node = pcall(state.tree.get_node, state.tree, l)
+
+                if ok and node and node.path and diff[node.path] then
+                  -- Pliki/katalogi z niezakomitowanymi zmianami mają już mocniejsze
+                  -- kolory gita — im nie nadpisujemy.
+                  local status = state.git_status_lookup and state.git_status_lookup[node.path]
+
+                  if not status then
+                    local text = vim.api.nvim_buf_get_lines(buf, l - 1, l, false)[1] or ""
+                    local s = text:find(node.name, 1, true)
+
+                    if s then
+                      -- priorytet > 4096, bo neo-tree koloruje nazwy (NeoTreeDirectoryName
+                      -- / NeoTreeFileName) z priorytetem 4096 i inaczej by nas przykrył
+                      vim.api.nvim_buf_set_extmark(buf, ns, l - 1, s - 1, {
+                        end_col = s - 1 + #node.name,
+                        hl_group = "NeoTreeBranchDiff",
+                        priority = 5000,
+                      })
+                    end
+                  end
+                end
+              end
             end,
           },
         },
@@ -531,22 +593,30 @@ return {
         end
       end)
 
-      -- Auto-open Neotree when nvim is started with a directory argument
-      -- (e.g. `nvim .`, `nvim some/folder`). Replaces the default netrw view.
-      vim.api.nvim_create_autocmd("VimEnter", {
-        callback = function()
-          if vim.fn.argc() ~= 1 then return end
-          local arg = vim.fn.argv(0)
-          local stat = vim.uv and vim.uv.fs_stat(arg) or vim.loop.fs_stat(arg)
-          if not stat or stat.type ~= "directory" then return end
+      -- Znajdź okno neo-tree (po filetype) i ogranicz jego szerokość do 20% ekranu.
+      -- Robimy to po otwarciu, bo window.width (120) jest współdzielone z konfiguracją
+      -- float — nie chcemy zwężać pływającego panelu.
+      local function clamp_side_width()
+        for _, w in ipairs(vim.api.nvim_list_wins()) do
+          local b = vim.api.nvim_win_get_buf(w)
 
-          -- Wipe the directory "buffer" netrw created so nvim doesn't keep it
-          local dir_buf = vim.api.nvim_get_current_buf()
-          vim.cmd.cd(arg)
-          vim.cmd("Neotree show reveal_force_cwd dir=" .. vim.fn.fnameescape(arg))
-          pcall(vim.api.nvim_buf_delete, dir_buf, { force = true })
-        end,
-      })
+          if vim.api.nvim_buf_is_valid(b) and vim.bo[b].filetype == "neo-tree" then
+            vim.api.nvim_win_set_width(w, math.floor(vim.o.columns * 0.2))
+            break
+          end
+        end
+      end
+
+      vim.keymap.set("n", "<leader>E", function()
+        local ok, err = pcall(vim.cmd, "Neotree reveal position=left")
+        if not ok then
+          -- Jeśli reveal nie działa (np. plik nie istnieje), otwórz Neotree bez reveal
+          vim.cmd("Neotree show position=left")
+        end
+
+        vim.schedule(clamp_side_width)
+      end)
+
     end,
   },
 

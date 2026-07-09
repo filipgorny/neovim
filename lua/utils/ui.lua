@@ -3214,19 +3214,11 @@ M.create_list_overview = function(opts)
   local list_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(list_win, list_buf)
 
-  -- Width: percentage of available columns (excluding opencode panel),
-  -- so panel scales when terminal is resized / fullscreened.
-  -- User can drag the split with the mouse — we capture the new ratio
-  -- and re-apply it on VimResized.
+  -- Width: percentage of available columns, so panel scales when terminal
+  -- is resized / fullscreened. User can drag the split with the mouse —
+  -- we capture the new ratio and re-apply it on VimResized.
   local function compute_available_width()
-    local total_width = vim.o.columns
-    local oc_width = 0
-    local ok_oc, oc_state = pcall(require, 'opencode.state')
-    if ok_oc and oc_state.windows and oc_state.windows.output_win
-       and vim.api.nvim_win_is_valid(oc_state.windows.output_win) then
-      oc_width = vim.api.nvim_win_get_width(oc_state.windows.output_win)
-    end
-    return total_width - oc_width
+    return vim.o.columns
   end
 
   local width_ratio = opts.width_ratio or 0.33
@@ -3371,7 +3363,7 @@ M.create_list_overview = function(opts)
         open_from_cursor()
         return
       end
-      -- Click on a different window (e.g. opencode): switch directly to avoid feedkeys races
+      -- Click on a different window: switch directly to avoid feedkeys races
       if mouse_pos.winid ~= 0 and vim.api.nvim_win_is_valid(mouse_pos.winid)
          and mouse_pos.winid ~= edit_win then
         vim.api.nvim_set_current_win(mouse_pos.winid)
@@ -3785,7 +3777,7 @@ M.create_list_overview = function(opts)
       end,
     })
 
-    -- Periodic git status polling to detect external changes (e.g. opencode plugin)
+    -- Periodic git status polling to detect external changes from outside nvim
     local h = io.popen("git status --porcelain 2>/dev/null")
     if h then
       last_git_status = h:read("*a")

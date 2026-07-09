@@ -8,6 +8,10 @@ M.history = {}
 M.current_index = 0
 M.navigating = false  -- Flag to prevent reordering during navigation
 
+-- Cap on number of entries kept. Each entry is a single bufnr (small integer),
+-- but unbounded growth still wastes memory + slows linear scans.
+local MAX_HISTORY = 200
+
 -- Dodaj bufor do historii
 function M.add_buffer(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
@@ -44,6 +48,14 @@ function M.add_buffer(bufnr)
   end
   
   table.insert(M.history, bufnr)
+
+  -- Cap the history — drop oldest entries from the front. Adjust current_index
+  -- to stay aligned with the (now shifted) list.
+  while #M.history > MAX_HISTORY do
+    table.remove(M.history, 1)
+    M.current_index = M.current_index - 1
+  end
+
   M.current_index = #M.history
 end
 
@@ -136,18 +148,23 @@ end
 function M.setup()
   -- Dodaj aktualny bufor do historii
   M.add_buffer(vim.api.nvim_get_current_buf())
-  
+
+  -- Augroup z clear=true zapobiega multiplikacji autocmds przy ponownym setup().
+  local group = vim.api.nvim_create_augroup("BufferHistory", { clear = true })
+
   -- Śledź zmiany buforów
   vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
     callback = function()
       vim.schedule(function()
         M.add_buffer(vim.api.nvim_get_current_buf())
       end)
     end,
   })
-  
+
   -- Usuń zamknięte bufory z historii
   vim.api.nvim_create_autocmd("BufDelete", {
+    group = group,
     callback = function(args)
       for i, buf in ipairs(M.history) do
         if buf == args.buf then

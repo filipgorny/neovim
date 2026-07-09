@@ -568,16 +568,20 @@ M.setup = function()
     end,
   })
 
-  -- Update last_accessed timestamp when switching buffers (with debounce)
-  local bufenter_timer = nil
+  -- Update last_accessed timestamp when switching buffers (with debounce).
+  -- Timer stored on M so re-running setup() can stop the previous one — the
+  -- closure-local approach orphaned the old timer reference.
+  if M._bufenter_timer then
+    pcall(vim.fn.timer_stop, M._bufenter_timer)
+    M._bufenter_timer = nil
+  end
   vim.api.nvim_create_autocmd({ "BufEnter" }, {
     group = augroup,
     callback = function(args)
-      -- Debounce to prevent excessive DB writes during rapid buffer switches
-      if bufenter_timer then
-        vim.fn.timer_stop(bufenter_timer)
+      if M._bufenter_timer then
+        vim.fn.timer_stop(M._bufenter_timer)
       end
-      bufenter_timer = vim.fn.timer_start(500, function()
+      M._bufenter_timer = vim.fn.timer_start(500, function()
         vim.schedule(function()
           add_buffer_to_session(args.buf)
         end)

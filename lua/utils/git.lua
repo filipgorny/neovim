@@ -533,9 +533,11 @@ local function apply_diff_marks_to_buf(buf)
 end
 
 local function ensure_diff_highlight_groups()
-  vim.api.nvim_set_hl(0, "BranchDiffAdd",    { bg = "#235f33" })
-  vim.api.nvim_set_hl(0, "BranchDiffChange", { bg = "#5f4f23" })
-  vim.api.nvim_set_hl(0, "BranchDiffDelete", { bg = "#5f2929" })
+  -- Desaturated palette aligned with gruvbox's own DiffAdd/Change/Delete —
+  -- darker variants so syntax foreground stays readable.
+  vim.api.nvim_set_hl(0, "BranchDiffAdd",    { bg = "#3a4226" })
+  vim.api.nvim_set_hl(0, "BranchDiffChange", { bg = "#2e3324" })
+  vim.api.nvim_set_hl(0, "BranchDiffDelete", { bg = "#4a181b" })
 end
 
 local function apply_branch_diff_signs(base)
@@ -618,7 +620,12 @@ M.review_branch_diff = function()
     format_display = data.format_display,
     highlight_display = data.highlight_display,
     on_refresh = function() return build_branch_diff_data(base) end,
-    auto_refresh = false,
+    -- Auto-refresh: watches .git/index (commits, staging) + dirs containing
+    -- the diffed files. refresh() only re-renders the panel — it does NOT
+    -- touch the edit window or its cursor position.
+    auto_refresh = true,
+    watch_dirs = get_watch_dirs(data.items),
+    on_refresh_dirs = get_watch_dirs,
     -- Wyczyść line-highlighty po zamknięciu panelu.
     on_close = M.reset_branch_diff_signs,
   })

@@ -319,11 +319,19 @@ local function add_to_history(filepath, line, col, bufnr)
 
   if count_rows and #count_rows > 0 then
     local count = tonumber(count_rows[1][1])
-    if count > config.max_history then
-      -- Delete oldest entries
+    if count and count > config.max_history then
       local to_delete = count - config.max_history
-      -- This is a bit complex in SQLite without proper ORM, but we can use a subquery
-      -- For now, we'll just let it grow a bit over max_history
+      -- Drop the oldest `to_delete` entries scoped to this project/branch.
+      -- Uses storage.exec for the subquery (storage.delete only does AND-eq).
+      storage.exec(
+        "DELETE FROM " .. NAV_HISTORY_TABLE ..
+        " WHERE id IN (" ..
+        "   SELECT id FROM " .. NAV_HISTORY_TABLE ..
+        "   WHERE project_path = $1 AND git_branch = $2" ..
+        "   ORDER BY timestamp ASC LIMIT $3" ..
+        " )",
+        { state.project_path, state.git_branch, to_delete }
+      )
     end
   end
 end

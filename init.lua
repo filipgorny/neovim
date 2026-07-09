@@ -1,4 +1,10 @@
+-- Disable built-in netrw so neo-tree can handle directory arguments
+-- (must be set BEFORE plugins load).
+vim.g.loaded_netrw = 1
+vim.g.loaded_netrwPlugin = 1
+
 require("system.lazy")
+require("system.auto_open_neotree")
 
 require("config.clipboard")
 require("config.editor")
@@ -14,19 +20,16 @@ require("utils.process").setup()
 require("utils.generator").setup()
 require("system.debugging").setup()
 require("utils.navigation").setup()
+require("system.projects").setup()
 require("utils.buffer_history").setup()
 require("utils.resize_cursor").setup()
-
--- Setup LLM with provider and API key from .env
--- Choose your provider:
--- - require("utils.llm.providers.claude") - Uses Claude API (requires ANTHROPIC_API_KEY)
--- - require("utils.llm.providers.claude_plan") - Uses your Claude Code plan (no API key needed)
-require("utils.llm").setup({
-  model = require("utils.llm.providers.claude_plan"), -- Using plan to save API tokens
-  -- api_key will be automatically loaded from .env file (only for claude API provider)
+require("utils.ts_paste_imports").setup()
+require("system.agent").setup({
+  providers = { "claude", "opencode" },
+  default = "claude",
+  skills = { "neovim", "history", "clipboard" },
 })
-
--- Copilot disabled - moved to deprecated/copilot.lua
+require("system.jira").setup()
 
 -- Create command to view errors in :messages
 -- Errors from code review and other operations are logged here without popups

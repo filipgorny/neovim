@@ -33,6 +33,77 @@ local function build_messages(prompt, options)
   return { { role = "user", content = prompt } }
 end
 
+-- Multi-turn chat with optional tool calling. Non-streaming.
+-- `messages` is the full conversation history (with role/content/tool_calls/etc).
+-- `options.tools` is an optional list of tool definitions (Ollama function-calling schema).
+-- callback(reply, err) where reply = { content = string, tool_calls = table|nil }
+function M:chat(messages, options, callback)
+  options = options or {}
+
+  local request_body = {
+    model = options.model or self.model,
+    messages = messages,
+    stream = false,
+    options = {},
+  }
+  if options.tools and #options.tools > 0 then
+    request_body.tools = options.tools
+  end
+  if options.temperature then
+    request_body.options.temperature = options.temperature
+  end
+  if options.num_predict or options.max_tokens then
+    request_body.options.num_predict = options.num_predict or options.max_tokens
+  end
+
+  local json_body = vim.fn.json_encode(request_body)
+  vim.fn.jobstart({
+    "curl", "-s",
+    "-X", "POST",
+    self.api_url .. "/api/chat",
+    "-H", "content-type: application/json",
+    "-d", json_body,
+  }, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      if not data then return end
+      local response_text = table.concat(data, "\n")
+      if response_text == "" then return end
+      local ok, response = pcall(vim.fn.json_decode, response_text)
+      if not ok then
+        vim.schedule(function() callback(nil, "JSON parse failed: " .. response_text) end)
+        return
+      end
+      if response.error then
+        vim.schedule(function() callback(nil, response.error) end)
+        return
+      end
+      local msg = response.message or {}
+      vim.schedule(function()
+        callback({
+          content = msg.content or "",
+          tool_calls = msg.tool_calls,
+        }, nil)
+      end)
+    end,
+    on_stderr = function(_, data)
+      if data and #data > 0 then
+        local err = table.concat(data, "\n")
+        if err ~= "" then
+          vim.schedule(function() callback(nil, "curl stderr: " .. err) end)
+        end
+      end
+    end,
+    on_exit = function(_, code)
+      if code ~= 0 then
+        vim.schedule(function()
+          callback(nil, "curl exited " .. code .. " (is Ollama at " .. self.api_url .. "?)")
+        end)
+      end
+    end,
+  })
+end
+
 function M:prompt(prompt, callback, options)
   options = options or {}
 

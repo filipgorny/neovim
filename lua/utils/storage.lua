@@ -230,6 +230,13 @@ function M.select(table_name, columns, conditions, order_by)
   return rows
 end
 
+-- Execute raw SQL (use sparingly — prefer the structured API where possible).
+-- Useful for things SQL-natively expressible that don't fit insert/select/delete:
+-- subqueries, JOINs, DELETE with LIMIT/OFFSET, etc.
+function M.exec(sql, params)
+  return exec_sql(sql, params)
+end
+
 -- Initialize database (create file if it doesn't exist)
 function M.init()
   ensure_db_dir()
