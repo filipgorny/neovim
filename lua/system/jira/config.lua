@@ -23,6 +23,7 @@ local ENV_KEYS = {
 
 local CRED_TABLE = "jira_credentials"
 local REPO_TABLE = "jira_repo"
+local FILTER_TABLE = "jira_filter"
 
 local initialized = false
 
@@ -45,6 +46,10 @@ local function ensure_tables()
     { name = "project_key", type = "TEXT" },
     { name = "last_screen", type = "TEXT" },
     { name = "last_issue_key", type = "TEXT" },
+  })
+  storage.create_table(FILTER_TABLE, {
+    { name = "repo_key", type = "TEXT PRIMARY KEY" },
+    { name = "data", type = "TEXT" },
   })
   initialized = true
 end
@@ -84,6 +89,7 @@ end
 -- odczycie. Dzięki temu liczba pól zawsze się zgadza.
 local CRED_COLS = { "id", "base_url", "email", "api_token" }
 local REPO_COLS = { "repo_key", "board_id", "board_name", "project_key", "last_screen", "last_issue_key" }
+local FILTER_COLS = { "repo_key", "data" }
 
 local SENTINEL = "-"
 
@@ -252,6 +258,59 @@ function M.last_screen()
   end
 
   return repo.last_screen or "board", repo.last_issue_key
+end
+
+-- ---------------------------------------------------------------------------
+-- Filtr zadań (per-repo, wspólny dla boardu i backlogu)
+-- ---------------------------------------------------------------------------
+--
+-- Trzymany jako pojedynczy JSON w kolumnie `data`. utils.storage parsuje wynik
+-- po '|' i po nowej linii, więc te znaki usuwamy z tekstu wyszukiwania —
+-- struktura JSON ich nie zawiera.
+
+-- @return { text = "<substring>", users = { [accountId] = true } }
+function M.get_filter()
+  ensure_tables()
+  local rows = storage.select(FILTER_TABLE, FILTER_COLS, { repo_key = M.project_key() })
+  local named = row_to_named(FILTER_COLS, rows[1])
+
+  local filter = { text = "", users = {} }
+
+  if named and named.data then
+    local ok, obj = pcall(vim.json.decode, named.data)
+
+    if ok and type(obj) == "table" then
+      filter.text = type(obj.text) == "string" and obj.text or ""
+
+      if type(obj.users) == "table" then
+        for _, id in ipairs(obj.users) do
+          filter.users[id] = true
+        end
+      end
+    end
+  end
+
+  return filter
+end
+
+function M.save_filter(filter)
+  ensure_tables()
+
+  local ids = {}
+
+  for id, on in pairs(filter.users or {}) do
+    if on then
+      table.insert(ids, id)
+    end
+  end
+
+  local text = (filter.text or ""):gsub("[|\r\n]", " ")
+  local data = vim.json.encode({ text = text, users = ids })
+
+  storage.insert_or_replace(FILTER_TABLE, {
+    repo_key = nz(M.project_key()),
+    data = nz(data),
+  })
 end
 
 return M

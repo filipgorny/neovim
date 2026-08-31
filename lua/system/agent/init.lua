@@ -17,18 +17,40 @@
 -- Znormalizowane zdarzenia zwracane przez provider.new_decoder():
 --   { kind = "ready",  model = string, session_id = string }
 --   { kind = "text",   text = string }
---   { kind = "tool",   label = string }
+--   { kind = "tool",   tool = string, target = string, body = string,
+--                       detail = string, label = string }
+--                       -- detail ≠ nil → w logu tylko nagłówek `label`,
+--                       -- treść po rozwinięciu (<CR>/dblklik), np. komenda basha
 --   { kind = "tokens", output_tokens = number }
+--   { kind = "question", questions = { { header, question, options, multiSelect } } }
 --   { kind = "result", duration_ms = number, output_tokens = number,
 --                       error = boolean, message = string }
+--
+-- Pytania: gdy agent potrzebuje decyzji, w okienku wpisywania pojawia się
+-- wyróżniony tłem blok z listą odpowiedzi (j/k, cyfra, ⏎) — patrz question.lua.
+-- Wywołanie AskUserQuestion przychodzi w praktyce przez --permission-prompt-tool
+-- (patrz permission.lua) i jest obsługiwane W TRAKCIE tury; zdarzenie `question`
+-- z providera zostaje jako zapasowa ścieżka „zapytaj po turze".
 
 local M = {}
 
 M.config = {
-  chat_width = 0.2,        -- ułamek szerokości ekranu dla kolumny czatu (maks. 20%)
-  input_height = 6,        -- wysokość okienka wpisywania (linie)
+  chat_width = 1 / 3,       -- ułamek szerokości ekranu dla kolumny czatu (1/3)
+  input_height_ratio = 0.15, -- wysokość okienka wpisywania jako ułamek wysokości panelu (15%)
   max_context_lines = 300, -- limit linii na diff / zawartość bufora w kontekście
   persist_history = true,  -- zapisuj rozmowę do SQLite (patrz history.lua)
+
+  -- Doklejane do system-promptu: agent działa headless, więc bez tego pisze
+  -- "nie mam potwierdzenia użytkownika" i przerywa zadanie. Z tym — zadaje
+  -- pytanie narzędziem, a my pokazujemy listę odpowiedzi do wyboru.
+  ask_prompt = table.concat({
+    "Pracujesz w edytorze, gdzie użytkownik NIE widzi interaktywnego promptu CLI.",
+    "Gdy potrzebujesz jego decyzji (wybór wariantu, potwierdzenie ryzykownej",
+    "zmiany, brakujący parametr), NIE pisz, że brakuje Ci potwierdzenia i nie",
+    "przerywaj zadania — wywołaj narzędzie AskUserQuestion z 2-4 konkretnymi,",
+    "wykluczającymi się opcjami. Wybór użytkownika wróci do Ciebie jako WYNIK",
+    "tego wywołania — dokończ wtedy zadanie, nie pytaj drugi raz.",
+  }, "\n"),
 
   -- Jak pokazywać kod dopisywany przez agenta (Edit/Write):
   --   mode = "flash"  → otwórz plik, przewiń do edycji, mignij tłem dodanego tekstu
@@ -68,6 +90,7 @@ local TOOL_ICON = {
   Grep = "",
   Glob = "",
   Bash = "",
+  bash = "",
 }
 
 -- Maks. liczba linii kodu pokazywanego pod użyciem narzędzia (reszta ucinana).
@@ -152,6 +175,9 @@ local function setup_highlights()
   hl(0, "AgentUserHeader", { fg = "#7aa2f7", bg = "#20243a", bold = true })
   hl(0, "AgentAgentHeader", { fg = "#bb9af7", bg = "#262039", bold = true })
   hl(0, "AgentTool", { fg = "#9ece6a", italic = true })
+  -- Rozwinięta treść zwijanego bloku (np. pełna komenda basha) — bursztyn na
+  -- własnym tle, żeby na pierwszy rzut oka odcinała się od reszty logu.
+  hl(0, "AgentToolDetail", { fg = "#e0af68", bg = "#1f2335" })
   hl(0, "AgentReady", { fg = "#73daca", italic = true })
   hl(0, "AgentResult", { fg = "#73daca", bold = true })
   hl(0, "AgentError", { fg = "#f7768e", bold = true })
@@ -159,6 +185,7 @@ local function setup_highlights()
   hl(0, "AgentThinking", { fg = "#e0af68", bold = true })
   -- Nazwy plików w wiadomościach: pogrubione, jaskrawe, podkreślone (klikalne).
   hl(0, "AgentFile", { fg = "#7dcfff", bold = true, underline = true })
+  require("system.agent.question").setup_highlights()
 end
 
 local state = {
@@ -169,12 +196,15 @@ local state = {
   model = nil,
   provider_name = nil,
   target_buf = nil,  -- bufor pliku, którego dotyczy rozmowa
+  root = nil,        -- korzeń projektu = cwd procesu agenta (przypięty na czas sesji)
+  selection = nil,   -- zaznaczenie z trybu wizualnego: { rel, ft, first, last, lines }
   log_buf = nil,
   log_win = nil,
   input_buf = nil,
   input_win = nil,
   thinking = { active = false, timer = nil, start_ms = 0, tokens = 0, frame = 1 },
   interrupt_pending = false,
+  last_turn_interrupted = false, -- poprzednia tura ubita w połowie pracy
   turn_had_error = false,
   -- śledzenie do podsumowania przy przełączaniu agenta
   last_user_msg = nil,
@@ -182,9 +212,17 @@ local state = {
   touched_files = {},
   bg_agents = {},   -- lista agentów w tle (Task): { id, desc, status, steps, label }
   bg_index = {},    -- id -> wpis powyżej
+  pending_question = nil, -- pytania z AskUserQuestion; pokazywane po turze
+  question_answered = false, -- pytanie tej tury poszło już przez permission.lua
+  folds = {},       -- extmark id -> { label, group, lines, open } (zwijane bloki w logu)
 }
 
+local question = require("system.agent.question")
+
 local bg_ns = vim.api.nvim_create_namespace("agent_bg_panel")
+local fold_ns = vim.api.nvim_create_namespace("agent_chat_folds")
+
+local FOLD_CLOSED, FOLD_OPEN = "▸", "▾"
 
 local history = require("system.agent.history")
 
@@ -200,6 +238,27 @@ end
 -- Bufory i layout czatu
 ---------------------------------------------------------------------------
 
+-- Klikanie/otwieranie nazw plików w wiadomościach: <CR>, gf i podwójny klik
+-- otwierają plik pod kursorem (z przewinięciem+mignięciem, jeśli jest :linia).
+-- Wydzielone, bo blok pytania (question.lua) przejmuje te klawisze na czas
+-- wyboru odpowiedzi i po zamknięciu przywraca je tym wywołaniem.
+local function install_log_keymaps(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+
+  local kopts = { buffer = buf, nowait = true, silent = true }
+
+  vim.keymap.set("n", "<CR>", function() M.activate_under_cursor() end, kopts)
+  vim.keymap.set("n", "gf", function() M.open_path_under_cursor() end, kopts)
+  -- Dwuklik także w trybie INSERT: klikając z okienka wpisywania (gdzie się
+  -- pisze), pierwszy klik przenosi okno, ale nvim zostaje w insercie — mapa
+  -- normalna nie jest wtedy w ogóle sprawdzana i dwuklik lądował w domyślnym
+  -- zaznaczaniu słowa zamiast rozwijać blok.
+  vim.keymap.set({ "n", "i" }, "<2-LeftMouse>", function() M.activate_mouse() end, kopts)
+  -- q / Q z okna logu zamykają cały panel (oba okna naraz).
+  vim.keymap.set("n", "q", function() M.close() end, kopts)
+  vim.keymap.set("n", "Q", function() M.close() end, kopts)
+end
+
 local function ensure_log_buf()
   if state.log_buf and vim.api.nvim_buf_is_valid(state.log_buf) then
     return state.log_buf
@@ -213,13 +272,7 @@ local function ensure_log_buf()
   vim.bo[buf].modifiable = false
   pcall(vim.api.nvim_buf_set_name, buf, "agent://log")
 
-  -- Klikanie/otwieranie nazw plików w wiadomościach: <CR>, gf i podwójny klik
-  -- otwierają plik pod kursorem (z przewinięciem+mignięciem, jeśli jest :linia).
-  local kopts = { buffer = buf, nowait = true, silent = true }
-
-  vim.keymap.set("n", "<CR>", function() M.open_path_under_cursor() end, kopts)
-  vim.keymap.set("n", "gf", function() M.open_path_under_cursor() end, kopts)
-  vim.keymap.set("n", "<2-LeftMouse>", function() M.open_path_under_cursor() end, kopts)
+  install_log_keymaps(buf)
 
   state.log_buf = buf
   return buf
@@ -244,6 +297,7 @@ local function ensure_input_buf()
   vim.keymap.set("i", "<S-CR>", "<CR>", map_opts)
   vim.keymap.set("i", "<C-CR>", "<CR>", map_opts)
   vim.keymap.set("n", "q", function() M.close() end, map_opts)
+  vim.keymap.set("n", "Q", function() M.close() end, map_opts)
   -- Ctrl-C przerywa myślenie (jak w CLI); poza turą zachowuje się jak Esc
   vim.keymap.set({ "n", "i" }, "<C-c>", function()
     if state.thinking.active then
@@ -386,6 +440,102 @@ local function append_chat(lines, group)
   return start
 end
 
+-- Czy log kończy się pustą linią? Bloki komend basha same otaczają się pustymi
+-- liniami, więc dwa z rzędu (albo blok zaraz po świeżym buforze) dałyby podwójny
+-- odstęp — sprawdzamy to przed dopisaniem separatora.
+local function log_ends_blank()
+  local buf = state.log_buf
+
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then return true end
+
+  local count = vim.api.nvim_buf_line_count(buf)
+  local last = vim.api.nvim_buf_get_lines(buf, count - 1, count, false)[1]
+
+  return last == nil or vim.trim(last) == ""
+end
+
+---------------------------------------------------------------------------
+-- Zwijane bloki w logu
+--
+-- Długa treść (np. cała komenda basha) nie zaśmieca wąskiej kolumny czatu:
+-- w buforze zostaje jedna linia-nagłówek ze strzałką, a treść dopisuje się pod
+-- nią dopiero po rozwinięciu (<CR> / podwójny klik). Pozycję nagłówka trzyma
+-- extmark, więc przesuwa się sama, gdy inne bloki się rozwijają.
+---------------------------------------------------------------------------
+
+-- Odśwież strzałkę ▸/▾ (wirtualny tekst na końcu linii nagłówka).
+local function render_fold_chevron(buf, id, lnum0, fold)
+  pcall(vim.api.nvim_buf_set_extmark, buf, fold_ns, lnum0, 0, {
+    id = id,
+    virt_text = { { " " .. (fold.open and FOLD_OPEN or FOLD_CLOSED), "AgentDim" } },
+    virt_text_pos = "eol",
+  })
+end
+
+-- Dopisz nagłówek zwijanego bloku; `detail` to treść pokazywana po rozwinięciu.
+local function append_fold(label, detail, group)
+  local buf = ensure_log_buf()
+  local line0 = append_chat({ label }, group)
+  local id = vim.api.nvim_buf_set_extmark(buf, fold_ns, line0, 0, {})
+
+  state.folds[id] = {
+    label = label,
+    group = group,
+    lines = vim.split(vim.trim(detail), "\n", { plain = true }),
+    open = false,
+  }
+
+  render_fold_chevron(buf, id, line0, state.folds[id])
+
+  return line0
+end
+
+-- Znajdź blok, którego dotyczy linia `lnum0`: nagłówek albo (dla rozwiniętych)
+-- któraś z linii treści. Zwraca id, wpis i numer linii nagłówka.
+local function fold_at(buf, lnum0)
+  for id, fold in pairs(state.folds) do
+    local pos = vim.api.nvim_buf_get_extmark_by_id(buf, fold_ns, id, {})
+
+    if pos and pos[1] then
+      if pos[1] == lnum0 then
+        return id, fold, pos[1], true
+      end
+
+      if fold.open and lnum0 > pos[1] and lnum0 <= pos[1] + #fold.lines then
+        return id, fold, pos[1], false
+      end
+    end
+  end
+end
+
+local function toggle_fold(buf, id, fold, head)
+  vim.bo[buf].modifiable = true
+
+  if fold.open then
+    -- Najpierw zdejmij podświetlenia treści: extmarki z usuwanych linii
+    -- inaczej „spadłyby” na linię pod nagłówkiem i pokolorowały cudzy tekst.
+    pcall(vim.api.nvim_buf_clear_namespace, buf, ns, head + 1, head + 1 + #fold.lines)
+    vim.api.nvim_buf_set_lines(buf, head + 1, head + 1 + #fold.lines, false, {})
+  else
+    local body = {}
+
+    for _, l in ipairs(fold.lines) do
+      table.insert(body, "  " .. l)
+    end
+
+    vim.api.nvim_buf_set_lines(buf, head + 1, head + 1, false, body)
+
+    for i = 0, #body - 1 do
+      hl_line(buf, head + 1 + i, "AgentToolDetail")
+    end
+  end
+
+  vim.bo[buf].modifiable = false
+  fold.open = not fold.open
+  render_fold_chevron(buf, id, head, fold)
+  render_bg_panel()
+end
+
 -- Wiadomość z kolorowym paskiem-nagłówkiem (ikona + nazwa mówcy).
 local function append_speaker(icon, name, header_group, text)
   local buf = ensure_log_buf()
@@ -424,7 +574,13 @@ function M.statusbar()
   end
 
   local model = state.model or (state.job and "łączenie…" or "sesja nieaktywna")
-  return string.format("%%#AgentDim#  ⏎ wyślij · ⇧⏎ nowa linia · q zamknij   —   %s%%*", model)
+  local sel = state.selection
+  local sel_txt = sel and string.format("   —   ✂ %s:%d-%d", sel.rel, sel.first, sel.last) or ""
+
+  return string.format(
+    "%%#AgentDim#  ⏎ wyślij · ⇧⏎ nowa linia · q zamknij   —   %s%s%%*",
+    model, sel_txt
+  )
 end
 
 local function start_thinking()
@@ -471,6 +627,44 @@ local function stop_thinking(duration_ms, final_tokens)
   return info
 end
 
+-- Wylicz i zastosuj rozmiary paneli czatu: kolumna po prawej = 1/3 szerokości
+-- ekranu, okienko wpisywania = 15% wysokości panelu. Wołane przy otwarciu
+-- layoutu ORAZ przy każdej zmianie rozmiaru terminala (VimResized), żeby
+-- proporcje trzymały się automatycznie.
+--
+-- Jeśli użytkownik ręcznie zmieni szerokość kolumny (mysz, <C-w>< / >), jego
+-- proporcja wygrywa — zapamiętujemy ją w state.width_ratio i to ona jest
+-- utrzymywana przy kolejnych zmianach rozmiaru terminala.
+local function apply_layout_size()
+  if state.log_win and vim.api.nvim_win_is_valid(state.log_win) then
+    local w = math.max(10, math.floor(vim.o.columns * (state.width_ratio or M.config.chat_width)))
+    vim.api.nvim_win_set_width(state.log_win, w)
+    state.applied_width = vim.api.nvim_win_get_width(state.log_win)
+  end
+
+  if state.input_win and vim.api.nvim_win_is_valid(state.input_win) then
+    local h = math.max(3, math.floor(vim.o.lines * M.config.input_height_ratio))
+    vim.api.nvim_win_set_height(state.input_win, h)
+  end
+end
+
+-- Wykryj ręczny resize kolumny czatu: jeśli jej szerokość różni się od tej,
+-- którą sami ostatnio ustawiliśmy, to znaczy, że zmienił ją użytkownik —
+-- zapisujemy jego proporcję. Zmiany wywołane przez nas samych (albo przez
+-- resize całego terminala, po którym i tak zaraz nakładamy layout) pomijamy.
+local function track_manual_resize()
+  if state.suppress_resize_track then return end
+
+  if not (state.log_win and vim.api.nvim_win_is_valid(state.log_win)) then return end
+
+  local w = vim.api.nvim_win_get_width(state.log_win)
+
+  if state.applied_width and w ~= state.applied_width and vim.o.columns > 0 then
+    state.width_ratio = w / vim.o.columns
+    state.applied_width = w
+  end
+end
+
 local function open_layout()
   local log_buf = ensure_log_buf()
   local input_buf = ensure_input_buf()
@@ -479,11 +673,14 @@ local function open_layout()
   vim.cmd("botright vsplit")
   state.log_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(state.log_win, log_buf)
-  vim.api.nvim_win_set_width(state.log_win, math.floor(vim.o.columns * M.config.chat_width))
   vim.wo[state.log_win].wrap = true
   vim.wo[state.log_win].number = false
   vim.wo[state.log_win].relativenumber = false
   vim.wo[state.log_win].signcolumn = "no"
+  vim.wo[state.log_win].fillchars = "eob: "
+  -- Trzymaj szerokość kolumny: zwykłe :split/:vsplit w edytorze (equalalways)
+  -- nie mają przestawiać panelu — ręczny resize użytkownika nadal działa.
+  vim.wo[state.log_win].winfixwidth = true
   -- Zablokuj podmianę bufora w tym oknie (żeby :edit/agent nie otworzył tu pliku)
   pcall(function() vim.wo[state.log_win].winfixbuf = true end)
 
@@ -491,13 +688,17 @@ local function open_layout()
   vim.cmd("belowright split")
   state.input_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(state.input_win, input_buf)
-  vim.api.nvim_win_set_height(state.input_win, M.config.input_height)
   vim.wo[state.input_win].wrap = true
   vim.wo[state.input_win].number = false
   vim.wo[state.input_win].relativenumber = false
   vim.wo[state.input_win].signcolumn = "no"
+  vim.wo[state.input_win].fillchars = "eob: "
+  vim.wo[state.input_win].winfixwidth = true
+  vim.wo[state.input_win].winfixheight = true
   vim.wo[state.input_win].winbar = "%!v:lua.require'system.agent'.statusbar()"
   pcall(function() vim.wo[state.input_win].winfixbuf = true end)
+
+  apply_layout_size()
 
   vim.api.nvim_set_current_win(state.input_win)
   vim.cmd("startinsert")
@@ -530,6 +731,74 @@ local function truncate(lines)
   return out
 end
 
+-- Czy plik był edytowany przez agenta w tej sesji? Bez tego git diff w
+-- kontekście wygląda jak zmiany napisane przez usera — a po przerwanej turze
+-- to najczęściej własna robota agenta.
+local function agent_touched(path)
+  local want = vim.fn.fnamemodify(path, ":p")
+
+  for touched in pairs(state.touched_files or {}) do
+    if vim.fn.fnamemodify(touched, ":p") == want then
+      return true
+    end
+  end
+
+  return false
+end
+
+-- Korzeń projektu — katalog roboczy procesu agenta.
+--
+-- Claude wczytuje reguły (CLAUDE.md) i pamięć projektu idąc od swojego cwd
+-- W GÓRĘ, nigdy w dół. Gdyby cwd procesu było cwd nvima, edytor odpalony
+-- w ~ (albo z panelem czatu mającym własne :lcd) puszczałby agenta bez reguł
+-- repozytorium, w którym faktycznie pracujesz. Dlatego korzeń liczymy
+-- z bufora rozmowy, a getcwd() zostaje fallbackiem.
+local ROOT_MARKERS = { ".git", "CLAUDE.md", ".claude" }
+
+local function detect_root()
+  local buf = state.target_buf
+
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    buf = vim.api.nvim_get_current_buf()
+  end
+
+  if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "" then
+    local name = vim.api.nvim_buf_get_name(buf)
+
+    if name ~= "" then
+      local root = vim.fs.root(vim.fs.dirname(name), ROOT_MARKERS)
+
+      if root then
+        return root
+      end
+    end
+  end
+
+  return vim.fn.getcwd()
+end
+
+-- Korzeń przypinamy na całą sesję: --resume musi wracać do tego samego cwd,
+-- a ścieżki w kontekście nie mogą przesuwać się w połowie rozmowy. Nowy czat
+-- (<leader>C) czyści przypięcie, więc korzeń liczy się od nowa.
+local function session_root()
+  if not state.root then
+    state.root = detect_root()
+  end
+
+  return state.root
+end
+
+-- Ścieżka względem korzenia projektu. fnamemodify(":.") liczy od cwd nvima,
+-- które nie musi być cwd agenta — model dostałby ścieżkę, której u siebie nie
+-- znajdzie. Plik spoza korzenia zostaje absolutny (jednoznaczny).
+local function rel_path(path)
+  if not path or path == "" then
+    return path
+  end
+
+  return vim.fs.relpath(session_root(), path) or path
+end
+
 local function build_context()
   local buf = state.target_buf
 
@@ -543,18 +812,39 @@ local function build_context()
     return ""
   end
 
-  local rel = vim.fn.fnamemodify(name, ":.")
+  local rel = rel_path(name)
   local ft = vim.bo[buf].filetype
   local parts = {
-    "[Editor context — attached automatically, not written by the user]",
+    "[Editor context — attached automatically by the editor, not written by the user]",
     ("Open file: %s%s"):format(rel, ft ~= "" and (" (filetype: " .. ft .. ")") or ""),
+    "This is the file the user is looking at right now. Unless the message names "
+      .. "another file, deictic requests (\"add this\", \"fix it\", \"here\", \"dopisz\", "
+      .. "\"popraw to\") refer to THIS file — act on it instead of asking which file is meant.",
   }
 
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_get_buf(win) == buf then
-      local row = vim.api.nvim_win_get_cursor(win)[1]
-      table.insert(parts, ("Cursor at line %d."):format(row))
-      break
+  if state.last_turn_interrupted then
+    table.insert(parts, "NOTE: your previous turn was interrupted by the user mid-work. "
+      .. "Files you had already changed are on disk as YOUR edits — do not read them back as the user's own work.")
+  end
+
+  local sel = state.selection
+
+  -- Zaznaczenie jest precyzyjniejsze od kursora — gdy jest, pokazujemy je
+  -- zamiast pozycji kursora (kursor i tak stoi na jednym z jego końców).
+  if sel then
+    table.insert(parts, "")
+    table.insert(parts, ("The user selected lines %d-%d of %s and is asking about THAT selection — "):format(sel.first, sel.last, sel.rel)
+      .. "it is the target of the request, not the whole file:")
+    table.insert(parts, "```" .. (sel.ft ~= "" and sel.ft or ""))
+    vim.list_extend(parts, truncate(sel.lines))
+    table.insert(parts, "```")
+  else
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_buf(win) == buf then
+        local row = vim.api.nvim_win_get_cursor(win)[1]
+        table.insert(parts, ("Cursor at line %d."):format(row))
+        break
+      end
     end
   end
 
@@ -562,7 +852,13 @@ local function build_context()
 
   if vim.v.shell_error == 0 and #diff > 0 then
     table.insert(parts, "")
-    table.insert(parts, "Uncommitted changes in this file (git diff HEAD):")
+
+    if agent_touched(name) then
+      table.insert(parts, "Uncommitted changes in this file (git diff HEAD) — this file was edited by YOU "
+        .. "earlier in this session, so these changes are (at least partly) your own, not the user's:")
+    else
+      table.insert(parts, "Uncommitted changes in this file (git diff HEAD), authored by the user:")
+    end
     table.insert(parts, "```diff")
     vim.list_extend(parts, truncate(diff))
     table.insert(parts, "```")
@@ -644,9 +940,12 @@ local function get_editor_win(create)
     -- Nowe okno obok istniejących (bez zamykania czatu/eksploratora)
     vim.cmd("topleft vsplit")
     local w = vim.api.nvim_get_current_win()
-    -- Wyczyść bufor specjalny / winfixbuf odziedziczony po panelu, z którego
-    -- powstał split, żeby dało się otworzyć plik.
+    -- Wyczyść bufor specjalny / winfixbuf / winfix{width,height} odziedziczone
+    -- po panelu, z którego powstał split, żeby dało się otworzyć plik i żeby
+    -- okno edytora normalnie się skalowało.
     pcall(function() vim.wo[w].winfixbuf = false end)
+    vim.wo[w].winfixwidth = false
+    vim.wo[w].winfixheight = false
 
     if vim.api.nvim_win_is_valid(prev) then
       pcall(vim.api.nvim_set_current_win, prev)
@@ -745,6 +1044,53 @@ function M.open_path_under_cursor()
   if hit then
     M.open_and_reveal(hit.path, hit.line)
   end
+end
+
+-- <CR> / podwójny klik w logu: najpierw zwijany blok (np. komenda basha),
+-- potem ścieżka pod kursorem. Kliknięcie w rozwiniętą treść ją zwija.
+function M.activate_under_cursor()
+  local buf = vim.api.nvim_get_current_buf()
+
+  if buf ~= state.log_buf then
+    return M.open_path_under_cursor()
+  end
+
+  local lnum0 = vim.api.nvim_win_get_cursor(0)[1] - 1
+  local id, fold, head, is_header = fold_at(buf, lnum0)
+
+  if id and is_header then
+    return toggle_fold(buf, id, fold, head)
+  end
+
+  local line = vim.api.nvim_get_current_line()
+
+  if #scan_paths(line) > 0 then
+    return M.open_path_under_cursor()
+  end
+
+  if id then
+    toggle_fold(buf, id, fold, head)
+  end
+end
+
+-- Dwuklik myszą w log. Cel bierzemy z POZYCJI MYSZY, nie z kursora: klikając z
+-- okienka wpisywania, w chwili sprawdzania mapy jesteśmy jeszcze w tamtym oknie
+-- (pierwszy klik dopiero przenosi focus), więc kursor logu wskazuje co innego.
+function M.activate_mouse()
+  local mp = vim.fn.getmousepos()
+  local win = mp.winid
+
+  if not (win and win ~= 0 and vim.api.nvim_win_is_valid(win)) then return end
+
+  if vim.api.nvim_win_get_buf(win) ~= state.log_buf or (mp.line or 0) <= 0 then
+    return
+  end
+
+  vim.cmd("stopinsert")
+  vim.api.nvim_set_current_win(win)
+  pcall(vim.api.nvim_win_set_cursor, win, { mp.line, math.max((mp.column or 1) - 1, 0) })
+
+  M.activate_under_cursor()
 end
 
 -- Otwiera edytowany plik, przewija do wstawionego tekstu i migocze jego tłem.
@@ -855,11 +1201,187 @@ local function ring_bell()
   end
 end
 
+-- Zdefiniowane niżej (potrzebne już tutaj — po wyborze odpowiedzi wracamy
+-- focusem do okienka wpisywania).
+local refocus_input
+
+-- Bufor, w którym renderuje się blok pytania. Podmieniany na czas pytania w
+-- OKIENKU WPISYWANIA — decyzja pojawia się tam, gdzie i tak trzymasz ręce.
+local function ensure_question_buf()
+  if state.question_buf and vim.api.nvim_buf_is_valid(state.question_buf) then
+    return state.question_buf
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "hide"
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].modifiable = false
+  pcall(vim.api.nvim_buf_set_name, buf, "agent://question")
+
+  state.question_buf = buf
+  return buf
+end
+
+local function set_input_win_buf(buf)
+  local win = state.input_win
+
+  pcall(function() vim.wo[win].winfixbuf = false end)
+  vim.api.nvim_win_set_buf(win, buf)
+  pcall(function() vim.wo[win].winfixbuf = true end)
+end
+
+-- Wstaw bufor pytania do okienka wpisywania, zapamiętując, do czego wrócić.
+local function enter_question_mode()
+  local win = state.input_win
+
+  if not (win and vim.api.nvim_win_is_valid(win)) then return nil end
+
+  local qbuf = ensure_question_buf()
+
+  state.input_restore = {
+    cursor = vim.api.nvim_win_get_cursor(win),
+    height = vim.api.nvim_win_get_height(win),
+    insert = vim.api.nvim_get_current_win() == win and vim.fn.mode():sub(1, 1) == "i",
+  }
+
+  vim.cmd("stopinsert")
+  set_input_win_buf(qbuf)
+
+  return qbuf
+end
+
+-- Blok pytania bywa wyższy niż okienko wpisywania — podrastamy je do połowy
+-- ekranu, a reszta (jeśli nadal się nie mieści) po prostu się przewija.
+--
+-- Liczymy WIERSZE EKRANU, nie linie bufora: kolumna czatu jest wąska i ma
+-- wrap=true, więc treść pytania oraz opisy opcji zawijają się na kilka wierszy
+-- (11 linii bufora potrafi zająć 17 wierszy). Wysokość liczona z linii bufora
+-- robiła okienko za niskie — widok przewijał się do zaznaczonej opcji, a
+-- nagłówek i treść pytania znikały ponad górną krawędzią.
+local function fit_question_win(line_count)
+  local win = state.input_win
+
+  if not (win and vim.api.nvim_win_is_valid(win)) then return end
+
+  local max = math.max(5, math.floor(vim.o.lines * 0.5))
+  local ok, height = pcall(function() return vim.api.nvim_win_text_height(win, {}).all end)
+  local needed = (ok and type(height) == "number" and height > 0) and height or line_count
+
+  vim.api.nvim_win_set_height(win, math.min(math.max(needed, 3), max))
+end
+
+-- Wróć okienkiem wpisywania do trybu sprzed pytania (bufor, kursor, insert).
+local function leave_question_mode()
+  local r = state.input_restore or {}
+  state.input_restore = nil
+
+  local win = state.input_win
+
+  if not (win and vim.api.nvim_win_is_valid(win)) then return end
+
+  if r.height then
+    pcall(vim.api.nvim_win_set_height, win, r.height)
+  end
+
+  if state.input_buf and vim.api.nvim_buf_is_valid(state.input_buf) then
+    set_input_win_buf(state.input_buf)
+    pcall(vim.api.nvim_win_set_cursor, win, r.cursor or { 1, 0 })
+  end
+
+  vim.api.nvim_set_current_win(win)
+
+  if r.insert ~= false then
+    vim.cmd("startinsert")
+  end
+end
+
+-- Pokaż listę odpowiedzi z AskUserQuestion. Wołane dopiero po zakończeniu tury:
+-- w trybie oneshot proces już nie żyje, więc wybór wraca do modelu jako kolejna
+-- wiadomość (kontekst trzyma --resume).
+-- Blok pytania zajmuje na chwilę okienko wpisywania (jest niskie — lista może
+-- się przewijać), a podsumowanie wyboru ląduje w logu. Wspólne wejście dla
+-- pytań modelu (AskUserQuestion) i próśb o zgodę (permission.lua). Zwraca
+-- false, gdy inne pytanie właśnie zajmuje UI — wołający decyduje, czy ponowić.
+function M.ask_question(questions, on_done, on_cancel)
+  if question.is_active() then return false end
+
+  local qbuf = enter_question_mode()
+
+  -- Panel czatu zamknięty — question.ask spadnie na vim.ui.select.
+  if not qbuf then
+    return question.ask({
+      questions = questions,
+      on_done = on_done,
+      on_cancel = on_cancel,
+    })
+  end
+
+  local shown = question.ask({
+    buf = qbuf,
+    win = state.input_win,
+    own_buf = true,
+    questions = questions,
+    on_summary = function(summary, group)
+      append_chat({ summary }, group)
+    end,
+    on_render = fit_question_win,
+    on_close = function()
+      install_log_keymaps(state.log_buf)
+      leave_question_mode()
+    end,
+    on_done = function(text, answers)
+      on_done(text, answers)
+    end,
+    on_cancel = function()
+      if on_cancel then on_cancel() end
+    end,
+  })
+
+  -- Nie udało się pokazać bloku (np. puste pytania) — nie zostawiaj okienka
+  -- wpisywania w trybie pytania.
+  if not shown then
+    leave_question_mode()
+  end
+
+  return shown
+end
+
+-- Woła permission.lua, gdy pytanie modelu zostało pokazane W LOCIE (CLI w trybie
+-- -p przepuszcza AskUserQuestion przez --permission-prompt-tool). Provider widzi
+-- to samo wywołanie jako zdarzenie `question`, więc bez tego znacznika po turze
+-- wyskoczyłoby drugie, identyczne pytanie.
+function M.mark_question_handled()
+  state.question_answered = true
+  state.pending_question = nil
+end
+
+local function ask_pending_question()
+  local questions = state.pending_question
+
+  if state.question_answered then
+    state.pending_question = nil
+
+    return
+  end
+
+  if not questions or question.is_active() then return end
+
+  state.pending_question = nil
+
+  M.ask_question(questions, function(text)
+    state.last_user_msg = text
+    M.send(text)
+  end)
+end
+
 local function handle_event(evt)
   if evt.kind == "ready" then
     state.session_id = evt.session_id
     state.model = evt.model
-    append_chat({ ("%s sesja gotowa · %s"):format(ICON.ready, evt.model or "?") }, "AgentReady")
+    append_chat({ ("%s sesja gotowa · %s · %s"):format(
+      ICON.ready, evt.model or "?", vim.fn.fnamemodify(session_root(), ":~")
+    ) }, "AgentReady")
     pcall(vim.cmd, "redrawstatus")
     return
   end
@@ -924,8 +1446,32 @@ local function handle_event(evt)
     return
   end
 
+  -- Pytanie do użytkownika: odkładamy je na koniec tury, żeby lista odpowiedzi
+  -- nie wskoczyła w środek lecącego jeszcze strumienia.
+  if evt.kind == "question" then
+    state.pending_question = evt.questions
+    return
+  end
+
   if evt.kind == "tool" then
     local icon = TOOL_ICON[evt.tool] or ""
+
+    -- Komenda basha potrafi mieć kilka linii i pipe'ów — pokazujemy ją w
+    -- całości, oddzieloną pustymi liniami od reszty logu.
+    if evt.detail and evt.detail ~= "" then
+      local block = log_ends_blank() and {} or { "" }
+
+      -- Ikona tylko przy pierwszej linii, kolejne wcięte pod nią.
+      for i, l in ipairs(vim.split(vim.trim(evt.detail), "\n", { plain = true })) do
+        table.insert(block, i == 1 and ("%s %s"):format(icon, l) or ("  %s"):format(l))
+      end
+
+      table.insert(block, "")
+      append_chat(block, "AgentTool")
+
+      return
+    end
+
     local target = (evt.target and evt.target ~= "") and (" " .. evt.target) or ""
     append_chat({ ("%s %s%s"):format(icon, evt.tool or "tool", target) }, "AgentTool")
 
@@ -962,6 +1508,7 @@ local function handle_event(evt)
 
     if state.interrupt_pending then
       state.interrupt_pending = false
+      state.last_turn_interrupted = true
       append_chat({ ("%s przerwano%s"):format(ICON.interrupt, suffix) }, "AgentDim")
     elseif evt.error then
       append_chat({ ("%s błąd: %s"):format(ICON.error, tostring(evt.message)) }, "AgentError")
@@ -970,6 +1517,12 @@ local function handle_event(evt)
     elseif info then
       append_chat({ ("%s gotowe%s"):format(ICON.done, suffix) }, "AgentResult")
       ring_bell()
+    end
+
+    -- Oneshot dopisuje jeszcze linie w on_exit — tam wołamy pytanie, żeby blok
+    -- z odpowiedziami został ostatni w buforze (renderuje się w miejscu).
+    if not is_oneshot() then
+      ask_pending_question()
     end
   end
 end
@@ -1001,6 +1554,11 @@ local function collect_launch()
   end
 
   local prompts = {}
+  local mcp = {}   -- name -> { command, args, env } (serwery MCP wnoszone przez skille)
+
+  if M.config.ask_prompt and M.config.ask_prompt ~= "" then
+    table.insert(prompts, M.config.ask_prompt)
+  end
 
   for _, skill in ipairs(M.skills) do
     if skill.on_enable and not skill._enabled then
@@ -1021,6 +1579,29 @@ local function collect_launch()
         env[k] = v
       end
     end
+
+    -- Skill może wystawić serwer MCP (nazwa + jak go odpalić + jego narzędzia).
+    -- Rejestrujemy definicję i dopuszczamy jego tools jako mcp__<serwer>__<tool>.
+    if skill.mcp then
+      local spec = skill.mcp(ctx)
+
+      if spec and spec.name then
+        mcp[spec.name] = { command = spec.command, args = spec.args or {}, env = spec.env }
+
+        for _, t in ipairs(spec.tools or {}) do
+          tools["mcp__" .. spec.name .. "__" .. t] = true
+        end
+
+        -- Skill może wystawić narzędzie pytające usera o zgodę. Dzięki niemu
+        -- tool spoza allowlisty nie jest po cichu odrzucany — CLI woła to
+        -- narzędzie, a ono pokazuje w czacie listę odpowiedzi (permission.lua).
+        if spec.permission_tool then
+          local full = "mcp__" .. spec.name .. "__" .. spec.permission_tool
+          cfg.permission_prompt_tool = full
+          tools[full] = true
+        end
+      end
+    end
   end
 
   cfg.allowed_tools = table.concat(vim.tbl_keys(tools), ",")
@@ -1029,18 +1610,34 @@ local function collect_launch()
     cfg.append_system_prompt = table.concat(prompts, "\n\n")
   end
 
+  -- Złóż plik --mcp-config z zebranych serwerów (provider zdecyduje, czy go użyje).
+  if next(mcp) then
+    local path = vim.fn.stdpath("cache") .. "/agent-mcp.json"
+    local fh = io.open(path, "w")
+
+    if fh then
+      fh:write(vim.json.encode({ mcpServers = mcp }))
+      fh:close()
+      cfg.mcp_config = path
+    end
+  end
+
   return cfg, env
 end
 
 -- Odetnij proces agenta od terminala pane'a (własna sesja przez setsid), żeby
 -- tmux z automatic-rename nie przemianował okna na nazwę procesu (np. "claude").
--- Ten sam PID po exec, więc Neovim dalej nim zarządza i ubija przy wyjściu.
+-- WAŻNE: flaga -w (--wait) jest konieczna — bez niej setsid forkuje dziecko do
+-- nowej sesji i NATYCHMIAST kończy się z kodem 0. Neovim widzi wtedy wyjście
+-- wrappera po ~1ms, zamyka pipe'y, a odłączony proces pisze donikąd (objaw:
+-- "gotowe · 0.0s · 0 tok" bez odpowiedzi). Z -w setsid czeka na dziecko i
+-- przekazuje jego stdout oraz kod wyjścia.
 local function detach_argv(argv)
   if vim.fn.executable("setsid") ~= 1 then
     return argv
   end
 
-  local wrapped = { "setsid" }
+  local wrapped = { "setsid", "-w" }
 
   for _, a in ipairs(argv) do
     table.insert(wrapped, a)
@@ -1049,9 +1646,45 @@ local function detach_argv(argv)
   return wrapped
 end
 
+-- Ubij CAŁE drzewo procesów zadania. setsid -w odcina claude do nowej sesji,
+-- więc samo jobstop kładzie tylko wrapper setsid — claude (lider tej sesji)
+-- zostaje sierotą i dalej mieli prompt. Kolejny send startuje wtedy drugiego
+-- claude i dwa procesy pracują nad tym samym promptem. Dlatego oprócz jobstop
+-- wyłuskujemy pid claude (dziecko wrappera) i ubijamy jego grupę procesów
+-- (claude + odpalone przez niego narzędzia).
+local function kill_job_tree(job)
+  if not job then return end
+
+  local ok, wrapper = pcall(vim.fn.jobpid, job)
+
+  pcall(vim.fn.jobstop, job)
+
+  if not ok or type(wrapper) ~= "number" or wrapper <= 0 then
+    return
+  end
+
+  for _, line in ipairs(vim.fn.systemlist({ "pgrep", "-P", tostring(wrapper) })) do
+    local pid = tonumber(line)
+
+    if pid then
+      pcall(vim.fn.system, { "kill", "-TERM", "-" .. pid }) -- grupa (claude liderem sesji)
+      pcall(vim.fn.system, { "kill", "-TERM", tostring(pid) })
+    end
+  end
+end
+
 -- Uruchom proces dla jednej tury (tryb oneshot, np. opencode). Kontekst
 -- między turami trzyma id sesji przekazywane w opts.session.
 local function spawn_oneshot(full)
+  -- Gwarancja jednego procesu: jeśli poprzednia tura wciąż żyje (podwójny
+  -- submit, wyścig, sierota po setsid), ubij ją W CAŁOŚCI, zanim wystartujemy
+  -- nową. Na wierzchu zostaje wyłącznie świeżo uruchomiona tura.
+  if state.job then
+    local old = state.job
+    state.job = nil -- odetnij callbacki starego procesu (strażnik id)
+    kill_job_tree(old)
+  end
+
   state.decoder = M.provider.new_decoder()
   state.turn_had_error = false
 
@@ -1059,7 +1692,7 @@ local function spawn_oneshot(full)
   local argv = detach_argv(M.provider.command(cfg, { message = full, session = state.session_id }))
 
   local job = vim.fn.jobstart(argv, {
-    cwd = vim.fn.getcwd(),
+    cwd = session_root(),
     env = next(env) and env or nil,
     on_stdout = function(id, data)
       if id ~= state.job or not data then return end
@@ -1078,6 +1711,7 @@ local function spawn_oneshot(full)
 
       if state.interrupt_pending then
         state.interrupt_pending = false
+        state.last_turn_interrupted = true
         append_chat({ ("%s przerwano%s"):format(ICON.interrupt, suffix) }, "AgentDim")
       elseif state.turn_had_error then
         -- linia błędu już dopisana przez zdarzenie error
@@ -1089,6 +1723,8 @@ local function spawn_oneshot(full)
         append_chat({ ("%s gotowe%s"):format(ICON.done, suffix) }, "AgentResult")
         ring_bell()
       end
+
+      ask_pending_question()
     end,
   })
 
@@ -1099,6 +1735,10 @@ local function spawn_oneshot(full)
   end
 
   state.job = job
+
+  -- Oneshot dostaje cały prompt w argv (-p), nic nie wysyłamy na stdin. Zamknij
+  -- go (EOF), bo inaczej claude czeka ~3s na dane ze stdin, zanim ruszy z turą.
+  pcall(vim.fn.chanclose, job, "stdin")
 end
 
 function M.start()
@@ -1117,7 +1757,9 @@ function M.start()
     state.ready = true
     state.session_id = nil
     state.model = (M.provider.config or {}).model
-    append_chat({ ("%s sesja gotowa · %s"):format(ICON.ready, state.model or provider_label()) }, "AgentReady")
+    append_chat({ ("%s sesja gotowa · %s · %s"):format(
+      ICON.ready, state.model or provider_label(), vim.fn.fnamemodify(session_root(), ":~")
+    ) }, "AgentReady")
     pcall(vim.cmd, "redrawstatus")
     return
   end
@@ -1136,7 +1778,7 @@ function M.start()
   local cfg, env = collect_launch()
 
   local job = vim.fn.jobstart(detach_argv(M.provider.command(cfg)), {
-    cwd = vim.fn.getcwd(),
+    cwd = session_root(),
     env = next(env) and env or nil,
     on_stdout = function(id, data)
       -- Ignoruj strumień ze starego procesu po restarcie sesji
@@ -1172,7 +1814,9 @@ function M.stop()
     return
   end
 
-  vim.fn.jobstop(state.job)
+  local job = state.job
+  state.job = nil
+  kill_job_tree(job)
 end
 
 local interrupt_seq = 0
@@ -1183,10 +1827,11 @@ function M.interrupt()
     return
   end
 
-  -- Oneshot: ubicie procesu tury kończy turę, sesja (na dysku) zostaje
+  -- Oneshot: ubicie procesu tury kończy turę, sesja (na dysku) zostaje.
+  -- Zostawiamy state.job — on_exit dopisze linię "przerwano" i wyzeruje stan.
   if is_oneshot() then
     state.interrupt_pending = true
-    vim.fn.jobstop(state.job)
+    kill_job_tree(state.job)
     return
   end
 
@@ -1211,9 +1856,18 @@ function M.send(text)
   local context = build_context()
   local full = context ~= "" and (context .. "\n\n" .. text) or text
 
-  -- Nowa tura — wyczyść panel agentów w tle z poprzedniej.
+  -- Zaznaczenie dotyczy jednej wiadomości — kolejne tury nie mają się do niego
+  -- odnosić, bo user zwykle zdążył już przejść gdzie indziej.
+  state.selection = nil
+
+  -- Nota o przerwanej turze idzie tylko raz — w pierwszej wiadomości po niej.
+  state.last_turn_interrupted = false
+
+  -- Nowa tura — wyczyść panel agentów w tle i niezadane pytanie z poprzedniej.
   state.bg_agents = {}
   state.bg_index = {}
+  state.pending_question = nil
+  state.question_answered = false
   render_bg_panel()
 
   append_speaker(ICON.user, "Ty", "AgentUserHeader", text)
@@ -1229,7 +1883,7 @@ function M.send(text)
   end
 end
 
-local function refocus_input()
+function refocus_input()
   if state.input_win and vim.api.nvim_win_is_valid(state.input_win) then
     vim.api.nvim_set_current_win(state.input_win)
     vim.cmd("startinsert")
@@ -1289,6 +1943,35 @@ local function remember_target()
   end
 end
 
+-- Zapamiętaj zaznaczenie z trybu wizualnego (wywoływane, gdy <leader>c/<leader>C
+-- przyszło z trybu x). Kontekst dostaje wtedy konkretne linie zamiast kursora.
+-- Znaki `<`/`>` są jeszcze nieustawione w chwili mapowania, więc bierzemy żywe
+-- końce zaznaczenia: getpos("v") i pozycję kursora.
+local function capture_selection()
+  local buf = vim.api.nvim_get_current_buf()
+
+  if vim.bo[buf].buftype ~= "" or vim.api.nvim_buf_get_name(buf) == "" then
+    return
+  end
+
+  local a = vim.fn.getpos("v")[2]
+  local b = vim.fn.getpos(".")[2]
+  local first, last = math.min(a, b), math.max(a, b)
+  local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
+
+  if #lines == 0 then
+    return
+  end
+
+  state.selection = {
+    rel = rel_path(vim.api.nvim_buf_get_name(buf)),
+    ft = vim.bo[buf].filetype,
+    first = first,
+    last = last,
+    lines = lines,
+  }
+end
+
 -- Pokaż panel czatu (lub przenieś do niego focus, jeśli już otwarty).
 local function show_chat()
   if state.input_win and vim.api.nvim_win_is_valid(state.input_win) then
@@ -1311,13 +1994,18 @@ local function teardown_session()
   if state.job then
     local old = state.job
     state.job = nil -- odetnij callbacki starego procesu (strażnik id)
-    pcall(vim.fn.jobstop, old)
+    kill_job_tree(old)
   end
 
   stop_thinking()
   state.ready = false
   state.session_id = nil
+  state.root = nil
   state.model = nil
+  state.pending_question = nil
+  state.question_answered = false
+  -- Zgody "na całą sesję" nie przechodzą na nową rozmowę.
+  require("system.agent.permission").reset()
 end
 
 local function clear_log()
@@ -1326,7 +2014,10 @@ local function clear_log()
     vim.api.nvim_buf_set_lines(state.log_buf, 0, -1, false, {})
     vim.bo[state.log_buf].modifiable = false
     pcall(vim.api.nvim_buf_clear_namespace, state.log_buf, ns, 0, -1)
+    pcall(vim.api.nvim_buf_clear_namespace, state.log_buf, fold_ns, 0, -1)
   end
+
+  state.folds = {}
 end
 
 -- Podsumowanie dotychczasowej pracy (≤500 znaków) — przekazywane nowemu
@@ -1355,9 +2046,22 @@ local function build_summary()
   return s
 end
 
--- <leader>c — otwórz/kontynuuj czat (startuje sesję, jeśli żadnej nie ma).
-function M.open()
+-- Wspólny wstęp obu wejść: zapamiętaj plik, a przy wywołaniu z trybu wizualnego
+-- także zaznaczone linie. Wyjście z trybu x musi nastąpić PO odczycie zaznaczenia.
+local function enter(visual)
   remember_target()
+
+  if visual then
+    capture_selection()
+    vim.cmd("normal! \27")
+  else
+    state.selection = nil
+  end
+end
+
+-- <leader>c — otwórz/kontynuuj czat (startuje sesję, jeśli żadnej nie ma).
+function M.open(visual)
+  enter(visual)
 
   if not session_active() then
     M.start()
@@ -1367,11 +2071,12 @@ function M.open()
 end
 
 -- <leader>C — nowy czat: zakończ sesję, wyczyść log i licznik, startuj świeżą.
-function M.fresh()
-  remember_target()
+function M.fresh(visual)
+  enter(visual)
   teardown_session()
   clear_log()
   state.touched_files = {}
+  state.last_turn_interrupted = false
   state.turn_count = 0
   state.last_user_msg = nil
   M.start()
@@ -1384,6 +2089,7 @@ local function handoff(note)
   local summary = build_summary()
   teardown_session()
   state.touched_files = {}
+  state.last_turn_interrupted = false
   state.turn_count = 0
   append_chat({ "", note }, "AgentDim")
   M.start()
@@ -1574,8 +2280,52 @@ function M.setup(opts)
     end,
   })
 
-  vim.keymap.set("n", "<leader>C", M.fresh, { desc = "Agent: nowy czat (świeża sesja)" })
-  vim.keymap.set("n", "<leader>c", M.open, { desc = "Agent: czat" })
+  -- Okienko wpisywania jest zawsze "gotowe do pisania": wejście do niego
+  -- (klik myszą, <C-w>, powrót z pickera) od razu włącza insert mode.
+  vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+    group = vim.api.nvim_create_augroup("AgentInputInsert", { clear = true }),
+    callback = function()
+      local win = vim.api.nvim_get_current_win()
+
+      if win ~= state.input_win or not vim.api.nvim_win_is_valid(win) then return end
+
+      if vim.api.nvim_win_get_buf(win) ~= state.input_buf then return end
+
+      if vim.fn.mode() ~= "i" then
+        vim.cmd("startinsert")
+      end
+    end,
+  })
+
+  -- Trzymaj proporcje panelu przy zmianie rozmiaru terminala: czat = 1/3
+  -- szerokości po prawej (albo proporcja ustawiona ręcznie przez użytkownika),
+  -- input = 15% wysokości panelu.
+  local resize_group = vim.api.nvim_create_augroup("AgentChatResize", { clear = true })
+
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = resize_group,
+    callback = function()
+      -- Neovim sam przeskaluje okna, zanim zdążymy nałożyć layout — te zmiany
+      -- to nie ręczny resize użytkownika, więc na czas przeliczenia wyłączamy
+      -- śledzenie.
+      state.suppress_resize_track = true
+      vim.schedule(function()
+        apply_layout_size()
+        state.suppress_resize_track = false
+      end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("WinResized", {
+    group = resize_group,
+    callback = track_manual_resize,
+  })
+
+  vim.keymap.set("n", "<leader>C", function() M.fresh(false) end, { desc = "Agent: nowy czat (świeża sesja)" })
+  vim.keymap.set("n", "<leader>c", function() M.open(false) end, { desc = "Agent: czat" })
+  -- Z trybu wizualnego zaznaczone linie jadą do agenta jako cel polecenia.
+  vim.keymap.set("x", "<leader>C", function() M.fresh(true) end, { desc = "Agent: nowy czat z zaznaczeniem" })
+  vim.keymap.set("x", "<leader>c", function() M.open(true) end, { desc = "Agent: czat z zaznaczeniem" })
 
   vim.api.nvim_create_user_command("AgentStop", M.stop, {})
   vim.api.nvim_create_user_command("AgentInterrupt", M.interrupt, {})

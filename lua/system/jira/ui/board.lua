@@ -12,10 +12,11 @@ local api = require("system.jira.api")
 local components = require("system.jira.ui.components")
 local avatar = require("system.jira.avatar")
 local frame = require("system.jira.ui.frame")
+local filter = require("system.jira.filter")
 
 local M = {}
 
-local CARD_H = 4      -- wysokość karty w liniach (3 treść + 1 odstęp)
+local CARD_H = 4      -- fallback wysokości karty (realne wysokości liczymy dynamicznie)
 local HEADER_H = 2    -- nagłówek kolumny (tytuł + linia)
 local CHROME_TOP = 2  -- zakładki + odstęp nad siatką
 
@@ -79,7 +80,8 @@ end
 -- Renderowanie
 -- ---------------------------------------------------------------------------
 
--- Zwraca block-listę span-linii dla jednej karty (wysokość CARD_H).
+-- Zwraca block-listę span-linii dla jednej karty (wysokość zmienna — zależna
+-- od długości zawiniętej treści zadania).
 -- Karta pod kursorem jest podświetlana; pozostałe mają cienki akcent statusu.
 local function render_card(issue, col_width, is_cursor)
   local f = issue.fields
@@ -99,21 +101,28 @@ local function render_card(issue, col_width, is_cursor)
 
   local type_ic = components.type_span(f.issuetype)
 
-  local line1 = {
+  local lines = {}
+
+  -- Linia klucza + typu zadania.
+  table.insert(lines, {
     span(gutter, gutter_hl),
     span(issue.key, key_hl),
     span("  ", bg),
     span(type_ic.text, bg or type_ic.hl),
-  }
+  })
 
-  local line2 = {
-    span("  ", bg),
-    span(components.truncate(f.summary or "", inner), text_hl),
-  }
+  -- Pełna treść zadania — zawinięta na tyle linii, ile trzeba (bez ucięcia).
+  for _, wl in ipairs(components.wrap(f.summary or "", inner)) do
+    table.insert(lines, {
+      span("  ", bg),
+      span(wl, text_hl),
+    })
+  end
 
+  -- Linia przypisania (+ ewentualny priorytet).
   local assignee_name = avatar.present(f.assignee) and f.assignee.displayName or "Nieprzypisane"
   local badge = avatar.badge(f.assignee)
-  local line3 = {
+  local line_assignee = {
     span("  ", bg),
     span(badge.text, bg or badge.hl),
     span(" ", bg),
@@ -121,20 +130,33 @@ local function render_card(issue, col_width, is_cursor)
   }
 
   if f.priority then
-    table.insert(line3, span("  ●", bg or components.priority_hl(f.priority.name)))
+    table.insert(line_assignee, span("  ●", bg or components.priority_hl(f.priority.name)))
   end
 
-  -- Dopełnij linie treści do pełnej szerokości kolumny.
-  line1 = components.pad_line(line1, col_width, bg)
-  line2 = components.pad_line(line2, col_width, bg)
-  line3 = components.pad_line(line3, col_width, bg)
+  table.insert(lines, line_assignee)
 
-  return { line1, line2, line3, {} } -- 4. pusta linia — odstęp
+  -- Dopełnij linie treści do pełnej szerokości kolumny (żeby tło kursora
+  -- pokrywało całą kartę).
+  for i, l in ipairs(lines) do
+    lines[i] = components.pad_line(l, col_width, bg)
+  end
+
+  table.insert(lines, {}) -- pusta linia — odstęp między kartami
+
+  return lines
 end
 
--- Buforowa linia (1-idx) kotwicy danej karty.
-local function card_anchor_line(card_index)
-  return CHROME_TOP + HEADER_H + (card_index - 1) * CARD_H + 1
+-- Buforowa linia (1-idx) kotwicy karty (kolumna × karta). Karty mają zmienną
+-- wysokość, więc sumujemy realne wysokości poprzednich kart w tej kolumnie.
+local function card_anchor_line(col_index, card_index)
+  local heights = state.card_heights and state.card_heights[col_index] or {}
+  local offset = 0
+
+  for i = 1, card_index - 1 do
+    offset = offset + (heights[i] or CARD_H)
+  end
+
+  return CHROME_TOP + HEADER_H + offset + 1
 end
 
 local function render()
@@ -155,6 +177,7 @@ local function render()
 
   -- Każda kolumna -> lista span-linii (nagłówek + karty).
   local rendered_cols = {}
+  local card_heights = {} -- [ci][cardi] = wysokość karty w liniach
   for ci, col in ipairs(state.columns) do
     local col_lines = {}
 
@@ -165,16 +188,23 @@ local function render()
     })
     table.insert(col_lines, { span(string.rep("━", col_width), accent) })
 
+    card_heights[ci] = {}
+
     for cardi, issue in ipairs(col.cards) do
       local is_cursor = (ci == state.cur_col and cardi == state.cur_card)
+      local card = render_card(issue, col_width, is_cursor)
 
-      for _, l in ipairs(render_card(issue, col_width, is_cursor)) do
+      card_heights[ci][cardi] = #card
+
+      for _, l in ipairs(card) do
         table.insert(col_lines, l)
       end
     end
 
     rendered_cols[ci] = col_lines
   end
+
+  state.card_heights = card_heights
 
   -- Rozciągnij kolumny do dołu ramki: dopełnij puste linie, żeby separatory
   -- kolumn ciągnęły się aż do spodu (chrome góra: CHROME_TOP; stopka: 2).
@@ -191,15 +221,18 @@ local function render()
   end
 
   frame.render(block)
+
+  local fdesc = filter.describe(state.filter)
   frame.set_footer({
     { "hjkl", "ruch" },
     { "space/s", "zmień status" },
     { "enter", "otwórz" },
+    { "C-f", fdesc ~= "" and ("filtr: " .. fdesc) or "filtr" },
     { "Tab", "Board/Task/Backlog" },
     { "q", "zamknij" },
   })
 
-  local anchor = card_anchor_line(state.cur_card)
+  local anchor = card_anchor_line(state.cur_col, state.cur_card)
   frame.set_cursor(anchor, 0)
 end
 
@@ -273,6 +306,36 @@ local function on_enter()
   end
 end
 
+-- Przelicza kolumny z zapamiętanych zadań wg bieżącego filtra (bez pobierania).
+local function rebuild()
+  if not state then
+    return
+  end
+
+  state.columns = build_columns(state.board_config, filter.apply(state.all_issues, state.filter))
+  clamp_cursor()
+  render()
+end
+
+-- Ctrl+F: modal filtrowania (tekst + użytkownicy). Zapis i przeliczenie w callbacku.
+local function open_filter()
+  if not state then
+    return
+  end
+
+  require("system.jira.ui.filter_modal").open({
+    title = "Filtr — Sprint Board",
+    text = state.filter.text,
+    selected = state.filter.users,
+    users = filter.collect_users({ state.all_issues }),
+    on_apply = function(result)
+      state.filter = { text = result.text, users = result.selected }
+      filter.save(state.filter)
+      rebuild()
+    end,
+  })
+end
+
 -- ---------------------------------------------------------------------------
 -- Montaż / dane
 -- ---------------------------------------------------------------------------
@@ -292,6 +355,7 @@ local function bind_keys()
     ["<Space>"] = change_status,
     ["s"] = change_status,
     ["<CR>"] = on_enter,
+    ["<C-f>"] = open_filter,
     ["r"] = function() M.reload() end,
   }
 
@@ -337,10 +401,14 @@ function M.reload()
 
         -- Zachowaj pozycję kursora między odświeżeniami (np. po zmianie statusu).
         local prev = state or {}
+        local active_filter = filter.load()
         state = {
           board_id = board_id,
           sprint = sprint,
-          columns = build_columns(board_config, issues),
+          board_config = board_config,
+          all_issues = issues,
+          filter = active_filter,
+          columns = build_columns(board_config, filter.apply(issues, active_filter)),
           cur_col = prev.cur_col or 1,
           cur_card = prev.cur_card or 1,
         }

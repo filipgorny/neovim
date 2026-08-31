@@ -27,9 +27,12 @@ require("utils.ts_paste_imports").setup()
 require("system.agent").setup({
   providers = { "claude", "opencode" },
   default = "claude",
-  skills = { "neovim", "history", "clipboard" },
+  -- editor: żywy nvim + historia + schowek jako narzędzia MCP (mcp/server.js).
+  -- Zastąpił trójkę { neovim, history, clipboard } opartą na promptach bash-RPC.
+  skills = { "editor" },
 })
 require("system.jira").setup()
+require("system.journal").setup()
 
 -- Create command to view errors in :messages
 -- Errors from code review and other operations are logged here without popups

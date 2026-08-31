@@ -141,12 +141,26 @@ local function render()
 
   local action_line = { span("Akcje:", "JiraColumnHeader"), span("  ", nil) }
   local action_line_no = #block + 1
+  -- Offset bajtowy w linii (getmousepos zwraca kolumnę w bajtach; etykiety
+  -- mają polskie znaki wielobajtowe, więc liczymy #tekst, nie szerokość).
+  local byte_col = #"Akcje:" + #"  "
   for i, a in ipairs(actions) do
     local focused = (#focusables + 1) == state.focus
-    table.insert(action_line, button(a.label, focused))
-    table.insert(focusables, { line = action_line_no, activate = a.activate })
+    local btn = button(a.label, focused)
+    table.insert(action_line, btn)
+
+    table.insert(focusables, {
+      line = action_line_no,
+      col_start = byte_col,
+      col_end = byte_col + #btn.text,
+      activate = a.activate,
+    })
+    byte_col = byte_col + #btn.text
+
     if i < #actions then
-      table.insert(action_line, span(" ", nil))
+      local sep = span(" ", nil)
+      table.insert(action_line, sep)
+      byte_col = byte_col + #sep.text
     end
   end
   push(action_line)
@@ -303,6 +317,31 @@ local function activate()
   end
 end
 
+-- Klik myszką: znajdź przycisk pod kursorem myszy (linia + zakres kolumn),
+-- ustaw na nim fokus i aktywuj.
+local function on_click()
+  local pos = vim.fn.getmousepos()
+
+  if not frame.is_open() or pos.winid ~= frame.state.win then
+    return
+  end
+
+  for i, fo in ipairs(state.focusables or {}) do
+    if fo.col_start and fo.line == pos.line
+      and pos.column > fo.col_start and pos.column <= fo.col_end then
+      local act = fo.activate
+      state.focus = i
+      render()
+
+      if act then
+        act()
+      end
+
+      return
+    end
+  end
+end
+
 local function bind_keys()
   frame.reset_screen_maps()
 
@@ -311,6 +350,7 @@ local function bind_keys()
   frame.map("n", "<Down>", function() move_focus(1) end)
   frame.map("n", "<Up>", function() move_focus(-1) end)
   frame.map("n", "<CR>", activate)
+  frame.map("n", "<LeftMouse>", on_click)
   frame.map("n", "gb", function() require("system.jira").show_board() end)
   frame.map("n", "r", function() M.reload() end)
   -- Esc/q zamykają (chrome ramki — reset_screen_maps).

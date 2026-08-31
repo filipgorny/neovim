@@ -264,7 +264,16 @@ return {
             ["<space>"] = {
               "toggle_node", nowait = false, -- disable `nowait` if you have existing combos starting with this char that you want to use {
             },
-            ["<2-LeftMouse>"] = "open",
+            -- Pojedynczy klik otwiera klikniętą pozycję (plik lub katalog).
+            -- Nie mapujemy <LeftMouse> — remap zabiera Vimowi wbudowane
+            -- pozycjonowanie kursora, przez co komenda "open" działała na
+            -- węźle spod starej pozycji kursora (folder się nie rozwijał).
+            -- <LeftRelease> leci już PO natywnej obsłudze <LeftMouse>,
+            -- czyli z kursorem na klikniętej linii.
+            ["<LeftRelease>"] = "open",
+            -- Podwójny klik i tak wysyła dwa <LeftRelease>, więc dodatkowe
+            -- mapowanie tylko toggle'owałoby folder w tę i z powrotem.
+            ["<2-LeftMouse>"] = "noop",
             ["<cr>"] = "open",
             ["<esc>"] = "cancel", -- close preview or floating neo-tree window
             ["P"] = { "toggle_preview", config = { use_float = true, use_image_nvim = true } },
@@ -365,8 +374,9 @@ return {
           -- "open_current",  -- netrw disabled, opening a directory opens within the
           -- window like netrw would, regardless of window.position
           -- "disabled",    -- netrw left alone, neo-tree does not handle opening dirs
-          use_libuv_file_watcher = false, -- This will use the OS level file watchers to detect changes
-          -- instead of relying on nvim autocmd events.
+          use_libuv_file_watcher = true, -- systemowe watchery OS: drzewko samo się
+          -- odświeża, gdy pojawi się / zniknie plik (także spoza nvim, np. z agenta,
+          -- build-toola czy `git checkout`) — bez ręcznego R.
           window = {
             mappings = {
               ["<bs>"] = "navigate_up",

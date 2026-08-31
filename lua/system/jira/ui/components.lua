@@ -121,6 +121,79 @@ function M.truncate(text, width)
   return out .. "…"
 end
 
+-- Zawija tekst do listy linii o szerokości <= width (świadome szerokości
+-- wyświetlania). Łamie po słowach; zbyt długie słowo tnie twardo.
+function M.wrap(text, width)
+  if width <= 0 then
+    return { "" }
+  end
+
+  text = vim.trim((text or ""):gsub("%s+", " "))
+
+  if text == "" then
+    return { "" }
+  end
+
+  local lines = {}
+  local cur = ""
+  local cur_w = 0
+
+  local function flush()
+    if cur ~= "" then
+      table.insert(lines, cur)
+      cur, cur_w = "", 0
+    end
+  end
+
+  for word in text:gmatch("%S+") do
+    local ww = M.dwidth(word)
+
+    -- Zbyt długie słowo — tnij twardo na kawałki mieszczące się w szerokości.
+    if ww > width then
+      flush()
+
+      while M.dwidth(word) > width do
+        local pref = ""
+        local i = 0
+
+        for _, ch in ipairs(vim.fn.str2list(word)) do
+          local s = vim.fn.nr2char(ch)
+
+          if M.dwidth(pref .. s) > width then
+            break
+          end
+
+          pref = pref .. s
+          i = i + 1
+        end
+
+        table.insert(lines, pref)
+        word = vim.fn.strcharpart(word, i)
+      end
+
+      cur, cur_w = word, M.dwidth(word)
+    else
+      local sep = (cur == "") and 0 or 1
+
+      if cur_w + sep + ww > width then
+        flush()
+        cur, cur_w = word, ww
+      else
+        cur = (cur == "") and word or (cur .. " " .. word)
+        cur_w = cur_w + sep + ww
+      end
+    end
+  end
+
+  flush()
+
+  if #lines == 0 then
+    lines = { "" }
+  end
+
+  return lines
+end
+
 -- ---------------------------------------------------------------------------
 -- Konstruktory spanów
 -- ---------------------------------------------------------------------------

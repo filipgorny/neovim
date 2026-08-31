@@ -22,20 +22,10 @@ end)
 -- Reload configuration
 keymap.bind("n", "<leader>rc", configuration.reload_config)
 
+-- Zamknij bieżący plik pokazując poprzedni tab z historii (zamiast pozwolić, by
+-- okno edytora zniknęło i czat agenta rozciągnął się na cały ekran).
 keymap.bind("n", "<S-q>", function()
-  local bufnr = vim.api.nvim_get_current_buf()
-  if vim.api.nvim_buf_is_valid(bufnr) then
-    -- Try to save the buffer first if it has unsaved changes
-    if vim.api.nvim_buf_get_option(bufnr, 'modified') then
-      local bufname = vim.api.nvim_buf_get_name(bufnr)
-      -- Only try to save if it's a real file (not a special buffer like DAP UI)
-      if bufname ~= "" and not bufname:match("^%[") then
-        pcall(vim.cmd, 'write')
-      end
-    end
-    -- Now delete the buffer (force=true to handle DAP buffers and other special cases)
-    vim.api.nvim_buf_delete(bufnr, { force = true })
-  end
+  buffer_history.smart_close(vim.api.nvim_get_current_buf())
 end)
 
 -- Restart Neovim (save state to SQLite, quit, process respawns)
@@ -104,6 +94,9 @@ keymap.bind("n", "<leader>l", file_browsing.find_files_by_mtime) -- Find files b
 -- Buffers navigation (Alt+k = left tab, Alt+j = right tab)
 keymap.bind("n", "<M-k>", "<cmd>BufferLineCyclePrev<CR>")
 keymap.bind("n", "<M-j>", "<cmd>BufferLineCycleNext<CR>")
+
+-- Alt+q: przełącz focus neo-tree ↔ okno z edytowanym plikiem (pomija panel agenta)
+keymap.bind("n", "<M-q>", require("utils.window_focus").toggle_tree_editor)
 
 -- Telescope buffer list sorted by edit time (main buffer picker)
 keymap.bind("n", "<leader>b", function()

@@ -59,8 +59,24 @@ return {
         },
       },
       numbers = "ordinal",
-      close_command = "bdelete! %d",
-      right_mouse_command = "bdelete! %d",
+      -- Domyślne "buffer %d" wykonuje :buffer w AKTUALNYM oknie — klik w tab
+      -- z kursorem w czacie agenta / panelu bocznym rzucał E1513 (winfixbuf).
+      -- Najpierw zejdź do okna edytora, dopiero potem przełącz bufor.
+      left_mouse_command = function(bufnr)
+        if not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+        ensure_editor_win()
+
+        local ok, err = pcall(vim.api.nvim_set_current_buf, bufnr)
+
+        if not ok then
+          vim.notify("Bufferline: nie można przełączyć bufora — " .. tostring(err), vim.log.levels.WARN)
+        end
+      end,
+      -- Zamykanie taba pokazuje poprzedni tab z historii i nie ubija okna
+      -- edytora (inaczej czat agenta rozciągnąłby się na cały ekran).
+      close_command = function(bufnr) require("utils.buffer_history").smart_close(bufnr) end,
+      right_mouse_command = function(bufnr) require("utils.buffer_history").smart_close(bufnr) end,
       sort_by = function(buf_a, buf_b)
         -- Sort by buffer history (most recent last, so it appears on the right)
         local history = require("utils.buffer_history").history

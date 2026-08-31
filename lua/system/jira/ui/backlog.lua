@@ -9,6 +9,7 @@ local api = require("system.jira.api")
 local components = require("system.jira.ui.components")
 local avatar = require("system.jira.avatar")
 local frame = require("system.jira.ui.frame")
+local filter = require("system.jira.filter")
 
 local M = {}
 
@@ -143,10 +144,13 @@ local function render()
   end
 
   frame.render(block)
+
+  local fdesc = filter.describe(state.filter)
   frame.set_footer({
     { "j/k", "ruch" },
     { "a", "dodaj do sprintu" },
     { "enter", "otwórz/dodaj" },
+    { "C-f", fdesc ~= "" and ("filtr: " .. fdesc) or "filtr" },
     { "Tab", "Board/Task/Backlog" },
     { "q/esc", "zamknij" },
   })
@@ -208,6 +212,37 @@ local function on_enter()
   end
 end
 
+-- Przelicza listy wg bieżącego filtra z zapamiętanych zadań (bez pobierania).
+local function rebuild()
+  if not state then
+    return
+  end
+
+  state.sprint_issues = filter.apply(state.all_sprint, state.filter)
+  state.backlog_issues = filter.apply(state.all_backlog, state.filter)
+  build_items()
+  render()
+end
+
+-- Ctrl+F: modal filtrowania (tekst + użytkownicy). Zapis i przeliczenie w callbacku.
+local function open_filter()
+  if not state then
+    return
+  end
+
+  require("system.jira.ui.filter_modal").open({
+    title = "Filtr — Backlog",
+    text = state.filter.text,
+    selected = state.filter.users,
+    users = filter.collect_users({ state.all_sprint, state.all_backlog }),
+    on_apply = function(result)
+      state.filter = { text = result.text, users = result.selected }
+      filter.save(state.filter)
+      rebuild()
+    end,
+  })
+end
+
 local function bind_keys()
   frame.reset_screen_maps()
 
@@ -217,6 +252,7 @@ local function bind_keys()
   frame.map("n", "<Up>", function() move(-1) end)
   frame.map("n", "a", add_to_sprint)
   frame.map("n", "<CR>", on_enter)
+  frame.map("n", "<C-f>", open_filter)
   frame.map("n", "r", function() M.reload() end)
 end
 
@@ -242,12 +278,17 @@ function M.reload()
             return
           end
 
+          local active_filter = filter.load()
+          local all_backlog = backlog or {}
           state = {
             board_id = board_id,
             sprint = sprint,
             sp_field = sp_field,
-            sprint_issues = sprint_issues,
-            backlog_issues = backlog or {},
+            filter = active_filter,
+            all_sprint = sprint_issues,
+            all_backlog = all_backlog,
+            sprint_issues = filter.apply(sprint_issues, active_filter),
+            backlog_issues = filter.apply(all_backlog, active_filter),
             cursor = state and state.cursor or 1,
           }
           build_items()

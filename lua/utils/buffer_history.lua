@@ -120,6 +120,66 @@ function M.go_next()
   end
 end
 
+-- Wybierz bufor, na który przełączyć okno po zamknięciu `exclude` — najświeższy
+-- w historii (czyli "poprzedni tab"), pomijając zamykany. Fallback: dowolny inny
+-- wylistowany, zwykły bufor. Zwraca nil, gdy nic nie zostaje.
+function M.pick_alternate(exclude)
+  for i = #M.history, 1, -1 do
+    local b = M.history[i]
+
+    if b ~= exclude and vim.api.nvim_buf_is_valid(b)
+      and vim.bo[b].buflisted and vim.bo[b].buftype == "" then
+      return b
+    end
+  end
+
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if b ~= exclude and vim.api.nvim_buf_is_valid(b)
+      and vim.bo[b].buflisted and vim.bo[b].buftype == "" then
+      return b
+    end
+  end
+
+  return nil
+end
+
+-- Zamknij bufor zachowując układ okien: KAŻDE zwykłe okno (nie float, nie
+-- winfixbuf — czyli nie panel czatu agenta) pokazujące ten bufor najpierw
+-- przełączamy na poprzedni tab z historii, a dopiero potem kasujemy bufor.
+-- Dzięki temu okno edytora nie znika (i czat agenta się nie rozciąga).
+function M.smart_close(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+  if not vim.api.nvim_buf_is_valid(bufnr) then return end
+
+  -- Zapisz niezapisane zmiany prawdziwego pliku przed zamknięciem.
+  if vim.bo[bufnr].modified then
+    local name = vim.api.nvim_buf_get_name(bufnr)
+
+    if name ~= "" and not name:match("^%[") then
+      pcall(vim.api.nvim_buf_call, bufnr, function() vim.cmd("write") end)
+    end
+  end
+
+  local alt = M.pick_alternate(bufnr)
+
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == bufnr
+      and vim.api.nvim_win_get_config(win).relative == ""
+      and not vim.wo[win].winfixbuf then
+      if alt then
+        pcall(vim.api.nvim_win_set_buf, win, alt)
+      else
+        -- Brak innego bufora — pusty scratch, żeby okno nie zniknęło.
+        local empty = vim.api.nvim_create_buf(true, false)
+        pcall(vim.api.nvim_win_set_buf, win, empty)
+      end
+    end
+  end
+
+  pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+end
+
 -- Pokaż historię buforów (do debugowania)
 function M.show_history()
   if #M.history == 0 then

@@ -86,11 +86,14 @@ function M.open()
   local footer_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_option(footer_buf, "bufhidden", "wipe")
 
+  -- Stopka na ostatnim wierszu treści ramki. Uwaga: przy borderze z tytułem
+  -- realnie renderowany wiersz jest o 1 niżej niż wynika z (row + height - 1),
+  -- dlatego kotwiczymy na row + height (zweryfikowane wizualnie).
   local footer_win = vim.api.nvim_open_win(footer_buf, false, {
     relative = "editor",
     width = width,
     height = 1,
-    row = row + height - 1,
+    row = row + height,
     col = col,
     style = "minimal",
     focusable = false,

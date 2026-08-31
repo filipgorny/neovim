@@ -323,12 +323,86 @@ return {
 
       -- =========================
       -- gopls (Go language server)
+
+      -- „No packages found for open file ..." — gopls krzyczy tym w każdym pliku,
+      -- gdy nie widzi modułu dla bufora. Nic nam to nie mówi (a jak plik naprawdę
+      -- jest poza modułem, to i tak widać po braku podpowiedzi), więc wycinamy je
+      -- z obu kanałów diagnostyk: push (publishDiagnostics) i pull (diagnostic).
+      local function drop_no_packages(items)
+        if not items then
+          return items
+        end
+
+        return vim.tbl_filter(function(d)
+          return not string.find(string.lower(d.message or ""), "no packages found", 1, true)
+        end, items)
+      end
+
+      -- Katalog vendor/ bez modules.txt to nie jest zwendorowany moduł, tylko
+      -- zwykły folder na artefakty (np. jar). Go i tak włącza wtedy tryb vendor
+      -- i wywala „inconsistent vendoring", zabijając całą inicjalizację gopls.
+      -- W takim repo każemy gopls używać module cache; prawdziwy vendor/
+      -- (z modules.txt) zostawiamy w spokoju.
+      local function fake_vendor_dir(root)
+        if not root then
+          return false
+        end
+
+        local vendor = vim.uv.fs_stat(root .. "/vendor")
+
+        return vendor ~= nil and vendor.type == "directory" and vim.uv.fs_stat(root .. "/vendor/modules.txt") == nil
+      end
+
+      local function gopls_before_init(params, config)
+        if not fake_vendor_dir(config.root_dir) then
+          return
+        end
+
+        local env = { env = { GOFLAGS = "-mod=mod" } }
+
+        params.initializationOptions = vim.tbl_deep_extend("force", params.initializationOptions or {}, env)
+        config.settings = vim.tbl_deep_extend("force", config.settings or {}, { gopls = env })
+      end
+
+      local gopls_handlers = {
+        ["textDocument/publishDiagnostics"] = function(err, result, ctx, cfg)
+          if result then
+            result.diagnostics = drop_no_packages(result.diagnostics)
+          end
+
+          return vim.lsp.handlers["textDocument/publishDiagnostics"](err, result, ctx, cfg)
+        end,
+
+        ["textDocument/diagnostic"] = function(err, result, ctx, cfg)
+          if result then
+            result.items = drop_no_packages(result.items)
+          end
+
+          return vim.lsp.handlers["textDocument/diagnostic"](err, result, ctx, cfg)
+        end,
+
+        -- Ten sam tekst potrafi przyjść też jako powiadomienie serwera.
+        ["window/showMessage"] = function(err, result, ctx, cfg)
+          if result and string.find(string.lower(result.message or ""), "no packages found", 1, true) then
+            return
+          end
+
+          return vim.lsp.handlers["window/showMessage"](err, result, ctx, cfg)
+        end,
+      }
+
       vim.lsp.config("gopls", {
         cmd = { "gopls" },
         filetypes = { "go", "gomod", "gowork", "gotmpl" },
-        root_markers = { "go.work", "go.mod", ".git" },
+        -- Zagnieżdżona lista = wyższy priorytet: najpierw szukamy modułu w górę
+        -- drzewa, a dopiero gdy go nie ma, spadamy na korzeń repo. Płaska lista
+        -- brała marker NAJBLIŻSZY, więc w repo z .git nad go.mod gopls startował
+        -- w katalogu bez modułu — i stąd „no packages found" w każdym pliku.
+        root_markers = { { "go.work", "go.mod" }, ".git" },
         capabilities = cmp_capabilities,
         on_attach = common_on_attach,
+        before_init = gopls_before_init,
+        handlers = gopls_handlers,
         settings = {
           gopls = {
             analyses = {

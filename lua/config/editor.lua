@@ -18,6 +18,10 @@ vim.opt.swapfile = false
 vim.opt.mouse = "a"
 vim.opt.mousemoveevent = true
 
+-- Bez `~` na pustych liniach za końcem bufora (dotyczy wszystkich okien, także
+-- panelu agenta, gdzie tyldy zaśmiecały wąską kolumnę czatu).
+vim.opt.fillchars:append({ eob = " " })
+
 -- Set terminal/tmux pane title to current file name (tmux uses it as window name)
 vim.opt.title = true
 vim.opt.titlestring = [[%t%( %M%)]]
