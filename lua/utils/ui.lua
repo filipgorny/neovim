@@ -3233,7 +3233,11 @@ M.create_list_overview = function(opts)
   vim.api.nvim_win_set_option(list_win, "cursorline", false)  -- We handle highlighting ourselves
   vim.api.nvim_win_set_option(list_win, "winfixwidth", false)
   vim.api.nvim_win_set_option(list_win, "wrap", false)
-  vim.api.nvim_win_set_option(list_win, "statusline", title_left)
+  -- Pasek panelu: tytuł po lewej, po prawej ściągawka z wyjściem — bez niej
+  -- nie widać, że panel w ogóle da się zamknąć klawiszem.
+  vim.api.nvim_win_set_option(
+    list_win, "statusline", title_left .. "%=" .. " [Esc] zamknij  [Tab] edytor "
+  )
 
   -- Track user resizes (mouse drag) to update the ratio
   local resize_augroup = vim.api.nvim_create_augroup(
@@ -3296,6 +3300,7 @@ M.create_list_overview = function(opts)
   local ns = vim.api.nvim_create_namespace("list_overview")
 
   -- Forward declarations
+  local handle -- uchwyt zwracany na końcu (potrzebny już w `close`)
   local render_list, open_file, select_next, select_prev, close
   local open_from_cursor, setup_edit_buf_keymaps, cleanup_edit_buf_keymaps
 
@@ -3542,6 +3547,10 @@ M.create_list_overview = function(opts)
     if is_closed then return end
     is_closed = true
 
+    if M._active_list_overview == handle then
+      M._active_list_overview = nil
+    end
+
     -- Stop auto-refresh watchers and pending timer
     stop_watchers()
     if pending_timer then
@@ -3678,10 +3687,11 @@ M.create_list_overview = function(opts)
     -- ] and [ navigate and open
     { "n", "]", select_next },
     { "n", "[", select_prev },
-    -- Close
+    -- Close. UWAGA: nie mapujemy tu <Esc><Esc> — samo <Esc> byłoby wtedy jego
+    -- prefiksem i nvim czekałby `timeoutlen` (1s) na drugi klawisz, przez co
+    -- panel wyglądał, jakby na Escape w ogóle nie reagował.
     { "n", "q", close },
     { "n", "<Esc>", close },
-    { "n", "<Esc><Esc>", close },
     -- Refresh
     { "n", "<M-r>", refresh },
     -- Switch to edit window
@@ -3746,6 +3756,11 @@ M.create_list_overview = function(opts)
     callback = function()
       if not is_closed then
         is_closed = true
+
+        if M._active_list_overview == handle then
+          M._active_list_overview = nil
+        end
+
         stop_watchers()
         if pending_timer then
           if not pending_timer:is_closing() then
@@ -3820,7 +3835,7 @@ M.create_list_overview = function(opts)
     vim.api.nvim_set_current_win(edit_win)
   end
 
-  return {
+  handle = {
     close = close,
     refresh = refresh,
     select_item = open_file,
@@ -3828,6 +3843,13 @@ M.create_list_overview = function(opts)
     select_prev = select_prev,
     get_current_index = function() return current_index end,
   }
+
+  -- Wystawiamy uchwyt na zewnątrz, żeby globalne „zamknij wszystkie panele"
+  -- (<leader>q) potrafiło zamknąć panel także wtedy, gdy focus jest zupełnie
+  -- gdzie indziej.
+  M._active_list_overview = handle
+
+  return handle
 end
 
 return M

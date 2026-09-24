@@ -35,7 +35,7 @@
 local M = {}
 
 M.config = {
-  chat_width = 1 / 3,       -- ułamek szerokości ekranu dla kolumny czatu (1/3)
+  chat_width = 0.4,         -- ułamek szerokości ekranu dla kolumny czatu (40%)
   input_height_ratio = 0.15, -- wysokość okienka wpisywania jako ułamek wysokości panelu (15%)
   max_context_lines = 300, -- limit linii na diff / zawartość bufora w kontekście
   persist_history = true,  -- zapisuj rozmowę do SQLite (patrz history.lua)
@@ -52,6 +52,30 @@ M.config = {
     "tego wywołania — dokończ wtedy zadanie, nie pytaj drugi raz.",
   }, "\n"),
 
+  -- Agent siedzi w edytorze, nie w CI: build i testy odpala użytkownik, który
+  -- ma projekt pod ręką. Bez tego dopisku CLI po każdej zmianie próbuje budować
+  -- projekt i puszczać testy, co przy większym repo trwa dłużej niż sama zmiana.
+  fast_prompt = table.concat({
+    "Pracujesz w edytorze i liczy się czas odpowiedzi — wykonaj polecenie i skończ.",
+    "NIE buduj projektu, NIE uruchamiaj testów, linterów, formaterów ani samego",
+    "programu, żeby sprawdzić, czy Twoja zmiana działa i czy się kompiluje —",
+    "zweryfikuje to użytkownik, który ma projekt otwarty. Nie dopisuj testów,",
+    "jeśli o nie nie poprosił. Czytaj tylko te pliki, które są naprawdę potrzebne",
+    "do wykonania zmiany, i nie odczytuj z powrotem tego, co przed chwilą zapisałeś.",
+    "Na koniec odpowiedz krótko, co zmieniłeś — bez planu weryfikacji.",
+  }, "\n"),
+
+  -- Edytor otwiera i podświetla plik tylko przy narzędziach Edit/Write — zmiany
+  -- przez Bash (sed -i, python, cat >) przechodzą niezauważone.
+  edit_prompt = table.concat({
+    "Użytkownik widzi Twoje zmiany na żywo: edytor otwiera plik, który edytujesz.",
+    "Zmieniaj pliki WYŁĄCZNIE narzędziami do edycji plików (Edit/Write) — nigdy",
+    "przez Bash (sed -i, python, perl, cat >, tee, heredoc).",
+    "Edytuj jeden plik na raz: skończ zmiany w jednym pliku, zanim przejdziesz do",
+    "następnego. Przed zmianami w pliku napisz jednym krótkim zdaniem, który plik",
+    "edytujesz i co w nim zmieniasz.",
+  }, "\n"),
+
   -- Jak pokazywać kod dopisywany przez agenta (Edit/Write):
   --   mode = "flash"  → otwórz plik, przewiń do edycji, mignij tłem dodanego tekstu
   --   mode = "inline" → blok ``` w logu czatu
@@ -60,8 +84,10 @@ M.config = {
     mode = "flash",
     open = true,           -- otwórz edytowany plik w oknie edytora
     scroll = true,         -- przewiń do miejsca edycji
-    flash_ms = 700,        -- czas migotania tła
-    flash_hl = "IncSearch", -- grupa podświetlenia migotania
+    context_lines = 3,     -- ile linii nad pierwszą zmianą widać po przewinięciu
+    flash_ms = 700,        -- jak długo podświetlenie trzyma pełny kolor
+    fade_ms = 900,         -- czas wygaszania podświetlenia do tła
+    flash_hl = "Search",   -- skąd brać kolor tła podświetlenia (wygasa do tła Normal)
     inline_max_lines = 60, -- limit linii dla trybu "inline"
   },
 }
@@ -225,6 +251,7 @@ local fold_ns = vim.api.nvim_create_namespace("agent_chat_folds")
 local FOLD_CLOSED, FOLD_OPEN = "▸", "▾"
 
 local history = require("system.agent.history")
+local reload = require("system.agent.reload")
 
 local function provider_label()
   return (M.provider and (M.provider.label or M.provider.name)) or "Agent"
@@ -254,9 +281,10 @@ local function install_log_keymaps(buf)
   -- normalna nie jest wtedy w ogóle sprawdzana i dwuklik lądował w domyślnym
   -- zaznaczaniu słowa zamiast rozwijać blok.
   vim.keymap.set({ "n", "i" }, "<2-LeftMouse>", function() M.activate_mouse() end, kopts)
-  -- q / Q z okna logu zamykają cały panel (oba okna naraz).
+  -- q / Q / <Esc> z okna logu zamykają cały panel (oba okna naraz).
   vim.keymap.set("n", "q", function() M.close() end, kopts)
   vim.keymap.set("n", "Q", function() M.close() end, kopts)
+  vim.keymap.set("n", "<Esc>", function() M.close() end, kopts)
 end
 
 local function ensure_log_buf()
@@ -298,6 +326,19 @@ local function ensure_input_buf()
   vim.keymap.set("i", "<C-CR>", "<CR>", map_opts)
   vim.keymap.set("n", "q", function() M.close() end, map_opts)
   vim.keymap.set("n", "Q", function() M.close() end, map_opts)
+  -- Okienko wpisywania samo wchodzi w insert (autocmd AgentInputInsert), więc
+  -- pierwszy <Esc> tylko z niego wychodzi — drugi zamyka panel. Bez tego jedyną
+  -- drogą wyjścia było `q`, o czym nie da się zgadnąć, siedząc w insercie.
+  vim.keymap.set("n", "<Esc>", function() M.close() end, map_opts)
+
+  -- <C-w>h/j/k/l prosto z insertu: w trybie wpisywania <C-w> kasuje słowo, więc
+  -- standardowe przechodzenie między oknami w tym panelu nie działało wcale.
+  for _, dir in ipairs({ "h", "j", "k", "l" }) do
+    vim.keymap.set("i", "<C-w>" .. dir, function()
+      vim.cmd("stopinsert")
+      vim.schedule(function() vim.cmd("wincmd " .. dir) end)
+    end, map_opts)
+  end
   -- Ctrl-C przerywa myślenie (jak w CLI); poza turą zachowuje się jak Esc
   vim.keymap.set({ "n", "i" }, "<C-c>", function()
     if state.thinking.active then
@@ -627,7 +668,7 @@ local function stop_thinking(duration_ms, final_tokens)
   return info
 end
 
--- Wylicz i zastosuj rozmiary paneli czatu: kolumna po prawej = 1/3 szerokości
+-- Wylicz i zastosuj rozmiary paneli czatu: kolumna po prawej = 40% szerokości
 -- ekranu, okienko wpisywania = 15% wysokości panelu. Wołane przy otwarciu
 -- layoutu ORAZ przy każdej zmianie rozmiaru terminala (VimResized), żeby
 -- proporcje trzymały się automatycznie.
@@ -866,7 +907,12 @@ local function build_context()
 
   if vim.bo[buf].modified then
     table.insert(parts, "")
-    table.insert(parts, "NOTE: the buffer has UNSAVED changes — the file on disk is stale.")
+    table.insert(parts, "NOTE: the buffer has UNSAVED changes — the file on disk is stale. "
+      .. "Edit/Write still operate on the file ON DISK, so anchor your edits (old_string) in the "
+      .. "disk version, not in the buffer text below. Do NOT re-type the user's unsaved changes: "
+      .. "the editor 3-way merges your saved version with them, so writing them again would "
+      .. "duplicate them or cause a conflict. Use the buffer contents below only to understand "
+      .. "what the user is working on:")
     table.insert(parts, "Current buffer contents:")
     table.insert(parts, "```" .. (ft ~= "" and ft or ""))
     vim.list_extend(parts, truncate(vim.api.nvim_buf_get_lines(buf, 0, -1, false)))
@@ -882,22 +928,103 @@ end
 
 local flash_ns = vim.api.nvim_create_namespace("agent_edit_flash")
 
--- Migocze tłem `count` linii od first0 (0-indeks) grupą `hl` na `ms` ms.
-local function flash_lines(buf, first0, count, hl, ms)
-  local last = vim.api.nvim_buf_line_count(buf) - 1
+local FADE_STEPS = 12
 
-  for l = first0, math.min(first0 + count - 1, last) do
-    pcall(vim.api.nvim_buf_set_extmark, buf, flash_ns, l, 0, {
-      line_hl_group = hl,
-      priority = 500,
-    })
+-- Kolor tła grupy (z rozwiązaniem linków) albo nil.
+local function hl_bg(name)
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+
+  return ok and hl and hl.bg or nil
+end
+
+-- Mieszanka dwóch kolorów 0xRRGGBB: t = 0 → from, t = 1 → to.
+local function blend(from, to, t)
+  local function ch(c, shift)
+    return math.floor(c / 2 ^ shift) % 256
   end
 
-  vim.defer_fn(function()
-    if vim.api.nvim_buf_is_valid(buf) then
-      vim.api.nvim_buf_clear_namespace(buf, flash_ns, 0, -1)
+  local out = 0
+
+  for _, shift in ipairs({ 16, 8, 0 }) do
+    local v = math.floor(ch(from, shift) + (ch(to, shift) - ch(from, shift)) * t + 0.5)
+    out = out + v * 2 ^ shift
+  end
+
+  return out
+end
+
+-- Podświetla tłem `count` linii od first0 (0-indeks): kolor grupy `hl` trzyma
+-- się `ms` ms, potem przez `fade_ms` ciemnieje do tła Normal i znika.
+local function flash_lines(buf, first0, count, hl, ms, fade_ms)
+  local cfg = M.config.edit_preview or {}
+  fade_ms = fade_ms or cfg.fade_ms or 900
+
+  local last = vim.api.nvim_buf_line_count(buf) - 1
+  local from = hl_bg(hl)
+  local to = hl_bg("Normal") or 0
+
+  -- Grupy kolejnych kroków wygaszania (przeliczane przy każdym podświetleniu,
+  -- bo motyw mógł się zmienić).
+  -- Krok 0 to pełny kolor; tylko tło, żeby tekst zachował kolory składni.
+  if from then
+    for i = 0, FADE_STEPS do
+      vim.api.nvim_set_hl(0, "AgentEditFade" .. i, { bg = blend(from, to, i / FADE_STEPS) })
     end
-  end, ms)
+  end
+
+  local marks = {}
+
+  for l = first0, math.min(first0 + count - 1, last) do
+    local ok, id = pcall(vim.api.nvim_buf_set_extmark, buf, flash_ns, l, 0, {
+      line_hl_group = from and "AgentEditFade0" or hl,
+      priority = 500,
+    })
+
+    if ok then
+      marks[id] = l
+    end
+  end
+
+  local function clear()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+
+    for id in pairs(marks) do
+      pcall(vim.api.nvim_buf_del_extmark, buf, flash_ns, id)
+    end
+  end
+
+  -- Motyw bez tła w grupie: nie ma czego wygaszać, samo zniknięcie.
+  if not from then
+    vim.defer_fn(clear, ms)
+
+    return
+  end
+
+  local function step(i)
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+
+    if i > FADE_STEPS then
+      clear()
+
+      return
+    end
+
+    for id in pairs(marks) do
+      local pos = vim.api.nvim_buf_get_extmark_by_id(buf, flash_ns, id, {})
+
+      if pos[1] then
+        pcall(vim.api.nvim_buf_set_extmark, buf, flash_ns, pos[1], 0, {
+          id = id,
+          line_hl_group = "AgentEditFade" .. i,
+          priority = 500,
+        })
+      end
+    end
+
+    vim.defer_fn(function() step(i + 1) end, math.floor(fade_ms / FADE_STEPS))
+  end
+
+  vim.defer_fn(function() step(1) end, ms)
 end
 
 -- Czy okno nadaje się do otwarcia w nim pliku: normalny bufor z plikiem, nie
@@ -1016,7 +1143,7 @@ function M.open_and_reveal(path, lnum)
     vim.api.nvim_win_call(win, function() vim.cmd("normal! zz") end)
 
     local cfg = M.config.edit_preview or {}
-    flash_lines(fbuf, target - 1, 1, cfg.flash_hl or "IncSearch", cfg.flash_ms or 700)
+    flash_lines(fbuf, target - 1, 1, cfg.flash_hl or "Search", cfg.flash_ms or 700)
   end
 end
 
@@ -1093,64 +1220,141 @@ function M.activate_mouse()
   M.activate_under_cursor()
 end
 
--- Otwiera edytowany plik, przewija do wstawionego tekstu i migocze jego tłem.
--- Best-effort: zapis agenta na dysk jest asynchroniczny, więc próbujemy kilka
--- razy, aż dopisany tekst pojawi się w pliku.
-local function preview_edit(path, body)
+-- Linie tekstu narzędzia bez pustego ogona po końcowym "\n".
+local function text_lines(text)
+  local lines = vim.split(text or "", "\n", { plain = true })
+
+  if #lines > 1 and lines[#lines] == "" then
+    table.remove(lines)
+  end
+
+  return lines
+end
+
+-- Ile linii na początku i na końcu body pokrywa się z before — to kontekst,
+-- który model dokleja do Edit, a nie zmiana. Zwraca lead, trail.
+local function common_edges(before, body)
+  local lead, trail = 0, 0
+
+  while lead < #before and lead < #body and before[lead + 1] == body[lead + 1] do
+    lead = lead + 1
+  end
+
+  while trail < #before - lead and trail < #body - lead
+    and before[#before - trail] == body[#body - trail] do
+    trail = trail + 1
+  end
+
+  return lead, trail
+end
+
+-- Pierwsza linia (1-indeks), od której plik zawiera cały blok `block`.
+local function find_block(lines, block)
+  for i = 1, #lines - #block + 1 do
+    local hit = true
+
+    for j = 1, #block do
+      if lines[i + j - 1] ~= block[j] then
+        hit = false
+
+        break
+      end
+    end
+
+    if hit then return i end
+  end
+
+  return nil
+end
+
+-- Otwiera edytowany plik, przewija do pierwszej zmienionej linii i podświetla
+-- zmienione linie. Best-effort: zapis agenta na dysk jest asynchroniczny, więc
+-- próbujemy kilka razy, aż dopisany tekst pojawi się w pliku.
+local function preview_edit(path, body, before)
   local cfg = M.config.edit_preview or {}
 
   if not path or path == "" or not body or body == "" then return end
+
+  -- Podgląd tylko, gdy siedzisz w okienku promptu — pracując w innym oknie nie
+  -- chcesz, żeby agent podmieniał Ci otwarty plik.
+  local function in_input()
+    return state.input_win ~= nil and vim.api.nvim_get_current_win() == state.input_win
+  end
+
+  if not in_input() then return end
 
   local win = get_editor_win(true)
 
   if not win then return end
 
   local abs = vim.fn.fnamemodify(path, ":p")
-  local body_lines = vim.split(body, "\n", { plain = true })
+  local body_lines = text_lines(body)
+  local lead, trail = common_edges(before and text_lines(before) or {}, body_lines)
+  -- Czyste usunięcie linii (nic nowego) — pokazujemy miejsce, bez podświetlenia.
+  local changed = math.max(#body_lines - lead - trail, 0)
 
+  -- Zapasowo, gdy blok w pliku nie pasuje 1:1 (np. formatter po zapisie).
   local needle
-  for _, l in ipairs(body_lines) do
-    if vim.trim(l) ~= "" then needle = vim.trim(l); break end
+  for i = lead + 1, #body_lines do
+    if vim.trim(body_lines[i]) ~= "" then needle = vim.trim(body_lines[i]); break end
   end
 
   local attempts = 0
   local function try()
     attempts = attempts + 1
 
+    -- Między próbami mogłeś przejść do innego okna.
+    if not in_input() or not vim.api.nvim_win_is_valid(win) then return end
+
     vim.api.nvim_win_call(win, function()
       vim.cmd("silent! checktime")
       local cur = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":p")
 
-      if cur ~= abs then
-        if cfg.open ~= false then
-          pcall(vim.cmd, "silent! edit " .. vim.fn.fnameescape(abs))
-        end
-      else
-        pcall(vim.cmd, "silent! edit")
+      if cur ~= abs and cfg.open ~= false then
+        pcall(vim.cmd, "silent! edit " .. vim.fn.fnameescape(abs))
       end
     end)
 
+    -- Zmodyfikowany bufor nie da się przeładować (:e bez ! to E37) — reload
+    -- scali wersję agenta z Twoimi niezapisanymi zmianami.
+    reload.sync(abs)
+
     local buf = vim.api.nvim_win_get_buf(win)
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local found
+    local block_at = find_block(lines, body_lines)
+    local first
 
-    if needle then
+    if block_at then
+      first = block_at + lead
+    elseif needle then
       for i, l in ipairs(lines) do
-        if vim.trim(l) == needle then found = i; break end
+        if vim.trim(l) == needle then first = i; break end
       end
     end
 
-    if not found then
-      if attempts < 3 then vim.defer_fn(try, 300) end
+    if not first then
+      if attempts < 10 then vim.defer_fn(try, 300) end
       return
     end
 
+    first = math.max(1, math.min(first, #lines))
+
+    -- Pierwsza zmiana u góry okna, z kilkoma liniami kontekstu nad nią.
     if cfg.scroll ~= false then
-      pcall(vim.api.nvim_win_set_cursor, win, { found, 0 })
-      vim.api.nvim_win_call(win, function() vim.cmd("normal! zz") end)
+      vim.api.nvim_win_call(win, function()
+        pcall(vim.fn.winrestview, {
+          lnum = first,
+          col = 0,
+          topline = math.max(1, first - (cfg.context_lines or 3)),
+        })
+      end)
     end
 
-    flash_lines(buf, found - 1, #body_lines, cfg.flash_hl or "IncSearch", cfg.flash_ms or 700)
+    -- Zmiana obejmuje cały plik (nowy plik, Write nadpisujący całość) —
+    -- podświetlanie wszystkiego nic nie mówi, więc go nie ma.
+    if changed == 0 or changed >= #lines then return end
+
+    flash_lines(buf, first - 1, changed, cfg.flash_hl or "Search", cfg.flash_ms or 700)
   end
 
   vim.defer_fn(try, 350)
@@ -1386,9 +1590,15 @@ local function handle_event(evt)
     return
   end
 
-  -- (oneshot) id sesji do kontynuacji kolejnej tury
+  -- (oneshot) id sesji do kontynuacji kolejnej tury; (stream) start kolejnej
+  -- tury — gdy bez wiadomości usera (np. po zadaniu w tle), włącz spinner.
   if evt.kind == "session" then
     state.session_id = evt.session_id
+
+    if not state.thinking.active then
+      start_thinking()
+    end
+
     return
   end
 
@@ -1475,8 +1685,12 @@ local function handle_event(evt)
     local target = (evt.target and evt.target ~= "") and (" " .. evt.target) or ""
     append_chat({ ("%s %s%s"):format(icon, evt.tool or "tool", target) }, "AgentTool")
 
-    if evt.body and evt.target and evt.target ~= "" then
-      state.touched_files[evt.target] = true
+    if evt.target and evt.target ~= "" then
+      reload.mark(evt.target, session_root())
+
+      if evt.body then
+        state.touched_files[evt.target] = true
+      end
     end
 
     -- Pokaż dopisywany kod wg trybu z konfiguracji
@@ -1484,7 +1698,7 @@ local function handle_event(evt)
       local mode = M.config.edit_preview and M.config.edit_preview.mode
 
       if mode == "flash" then
-        preview_edit(evt.target, evt.body)
+        preview_edit(evt.target, evt.body, evt.before)
       elseif mode == "inline" then
         append_code_block(evt.target, evt.body)
       end
@@ -1501,8 +1715,9 @@ local function handle_event(evt)
 
   if evt.kind == "result" then
     local info = stop_thinking(evt.duration_ms, evt.output_tokens)
-    -- Przeładuj bufory zmienione przez agenta na dysku
+    -- Przeładuj / scal bufory zmienione przez agenta na dysku
     vim.cmd("checktime")
+    reload.turn_end()
 
     local suffix = info and (" · %.1fs · %d tok"):format(info.secs, info.tokens) or ""
 
@@ -1554,10 +1769,20 @@ local function collect_launch()
   end
 
   local prompts = {}
-  local mcp = {}   -- name -> { command, args, env } (serwery MCP wnoszone przez skille)
+  local mcp = {}   -- name -> definicja serwera MCP (wnoszone przez skille)
 
   if M.config.ask_prompt and M.config.ask_prompt ~= "" then
     table.insert(prompts, M.config.ask_prompt)
+  end
+
+  if M.config.fast_prompt and M.config.fast_prompt ~= "" then
+    table.insert(prompts, M.config.fast_prompt)
+  end
+
+  if M.config.edit_prompt and M.config.edit_prompt ~= "" then
+    table.insert(prompts, M.config.edit_prompt)
+    -- Osobno dla providerów bez system-promptu (opencode dokleja do wiadomości).
+    cfg.edit_prompt = M.config.edit_prompt
   end
 
   for _, skill in ipairs(M.skills) do
@@ -1586,7 +1811,14 @@ local function collect_launch()
       local spec = skill.mcp(ctx)
 
       if spec and spec.name then
-        mcp[spec.name] = { command = spec.command, args = spec.args or {}, env = spec.env }
+        -- Serwer zdalny (Figma) niesie adres zamiast komendy — nie ma procesu
+        -- do odpalenia, a autoryzację (OAuth) CLI bierze ze swojego magazynu
+        -- poświadczeń po nazwie serwera. Serwer lokalny jedzie po stdio.
+        if spec.url and spec.url ~= "" then
+          mcp[spec.name] = { type = spec.type or "http", url = spec.url, headers = spec.headers }
+        else
+          mcp[spec.name] = { command = spec.command, args = spec.args or {}, env = spec.env }
+        end
 
         for _, t in ipairs(spec.tools or {}) do
           tools["mcp__" .. spec.name .. "__" .. t] = true
@@ -1707,6 +1939,7 @@ local function spawn_oneshot(full)
       state.job = nil
       local info = stop_thinking()
       vim.cmd("checktime")
+      reload.turn_end()
       local suffix = info and (" · %.1fs · %d tok"):format(info.secs, info.tokens) or ""
 
       if state.interrupt_pending then
@@ -1869,6 +2102,10 @@ function M.send(text)
   state.pending_question = nil
   state.question_answered = false
   render_bg_panel()
+
+  -- Stan plików sprzed tury = baza scalania, gdy agent zapisze plik, który
+  -- masz otwarty z niezapisanymi zmianami (patrz system.agent.reload).
+  reload.snapshot()
 
   append_speaker(ICON.user, "Ty", "AgentUserHeader", text)
   persist("user", text)
@@ -2267,6 +2504,15 @@ function M.setup(opts)
     callback = setup_highlights,
   })
 
+  -- Bufory otwartych plików, które agent zmienia na dysku: przeładowanie, a
+  -- przy niezapisanych zmianach usera — scalenie 3-way (system.agent.reload).
+  reload.setup({
+    log = function(lines, hl)
+      append_chat(lines, hl)
+    end,
+    root = session_root,
+  })
+
   -- Świadomość aktualnie otwartego pliku: okno agenta jest niezależne od okna
   -- z plikiem, ale zawsze wie, na którym pliku pracujesz (do kontekstu wiadomości).
   vim.api.nvim_create_autocmd({ "BufEnter", "WinEnter" }, {
@@ -2297,7 +2543,7 @@ function M.setup(opts)
     end,
   })
 
-  -- Trzymaj proporcje panelu przy zmianie rozmiaru terminala: czat = 1/3
+  -- Trzymaj proporcje panelu przy zmianie rozmiaru terminala: czat = 40%
   -- szerokości po prawej (albo proporcja ustawiona ręcznie przez użytkownika),
   -- input = 15% wysokości panelu.
   local resize_group = vim.api.nvim_create_augroup("AgentChatResize", { clear = true })

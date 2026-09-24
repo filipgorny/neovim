@@ -258,16 +258,25 @@ end
 -- Pick base branch for branch-diff: prefer local `dev`, then `origin/dev`,
 -- then local `main`, then `origin/main`. Returns nil if none exists.
 local function get_branch_diff_base()
+  -- Bieżący branch odpada jako baza — na `dev` porównanie z `dev` zawsze wychodzi
+  -- puste i panel się nie otwierał, mimo że sensowną bazą było `main`.
+  local current = vim.fn.systemlist("git rev-parse --abbrev-ref HEAD")[1] or ""
+
   for _, ref in ipairs({ "dev", "origin/dev", "main", "origin/main" }) do
-    local h = io.popen(string.format("git rev-parse --verify --quiet %s 2>/dev/null", ref))
-    if h then
-      local out = h:read("*l")
-      h:close()
-      if out and out ~= "" then
-        return ref
+    if ref ~= current and ref ~= ("origin/" .. current) then
+      local h = io.popen(string.format("git rev-parse --verify --quiet %s 2>/dev/null", ref))
+
+      if h then
+        local out = h:read("*l")
+        h:close()
+
+        if out and out ~= "" then
+          return ref
+        end
       end
     end
   end
+
   return nil
 end
 
@@ -595,15 +604,18 @@ M.review_branch_diff = function()
     return
   end
 
-  -- Switch gitsigns to use base branch as reference + dim line-bg highlights.
-  -- Stays active after panel closes; reset with M.reset_branch_diff_signs().
-  apply_branch_diff_signs(base)
-
   local data = build_branch_diff_data(base)
+
   if not data then
     vim.notify(string.format("Brak commitów różniących HEAD od '%s'", base), vim.log.levels.INFO)
     return
   end
+
+  -- Podświetlenia włączamy DOPIERO gdy wiadomo, że panel się otworzy — inaczej
+  -- nieudane <leader>gd zostawiało włączony autocmd kolorujący wszystkie bufory,
+  -- bez panelu, który by go po zamknięciu posprzątał.
+  -- Stays active after panel closes; reset with M.reset_branch_diff_signs().
+  apply_branch_diff_signs(base)
 
   vim.api.nvim_set_hl(0, "ListOverviewNew", { fg = "#73c991" })
   vim.api.nvim_set_hl(0, "ListOverviewModified", { fg = "#cca700" })

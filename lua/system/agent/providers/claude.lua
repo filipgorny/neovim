@@ -1,10 +1,12 @@
 -- Provider Claude Code CLI dla system.agent.
 --
--- Tryb "oneshot": każda wiadomość to osobny `claude -p <msg>` z wyjściem
--- stream-json. CLI (od 2.x) przetwarza wiadomość i kończy proces po `result`,
--- więc trwały proces (stream) nie ma sensu — kontekst trzymamy przez id sesji
--- przekazywane następnej turze przez `--resume <session_id>`.
---   command(config, opts) -> string[]         -- argv; opts.message/opts.session
+-- Tryb "stream": jeden trwały `claude -p --input-format stream-json`, wiadomości
+-- idą po stdin. Bez --input-format CLI kończy proces po pierwszym `result` i
+-- zabija zadania w tle — a przy trwałym procesie ich task_notification startuje
+-- kolejną turę, więc agent może wysłać kilka wiadomości pod rząd.
+--   command(config, opts) -> string[]         -- argv; opts.session = --resume
+--   encode(text)           -> string          -- linia payloadu wiadomości usera
+--   interrupt_payload(id)  -> string          -- przerwanie bieżącej tury
 --   new_decoder()          -> fun(data) -> Event[]  -- dekoder chunków stdout
 --
 -- Claude może modyfikować pliki (--permission-mode auto — CLI sam akceptuje
@@ -15,7 +17,7 @@ local M = {
   name = "claude",
   label = "Claude",
   icon = "󰚩",
-  mode = "oneshot",
+  mode = "stream",
 }
 
 M.config = {
@@ -165,12 +167,11 @@ end
 function M.command(config, opts)
   opts = opts or {}
 
-  -- WAŻNE: prompt musi iść ZARAZ po -p. Gdyby był na końcu, wariadyczny
-  -- --allowedTools połknąłby go jako nazwy narzędzi (claude: "Input must be
-  -- provided…"). Dlatego message jako pierwszy argument pozycyjny.
+  -- Wiadomości idą po stdin (encode), więc -p nie dostaje promptu w argv.
   local argv = {
     config.cmd or "claude",
-    "-p", opts.message or "",
+    "-p",
+    "--input-format", "stream-json",
     "--output-format", "stream-json",
     "--verbose",
     "--permission-mode", config.permission_mode or "auto",
@@ -205,6 +206,25 @@ function M.command(config, opts)
   end
 
   return argv
+end
+
+function M.encode(text)
+  return vim.fn.json_encode({
+    type = "user",
+    message = {
+      role = "user",
+      content = { { type = "text", text = text } },
+    },
+  })
+end
+
+-- Payload przerywający bieżącą turę (sesja żyje dalej, kontekst zostaje).
+function M.interrupt_payload(request_id)
+  return vim.fn.json_encode({
+    type = "control_request",
+    request_id = request_id,
+    request = { subtype = "interrupt" },
+  })
 end
 
 local function tool_target(block)
@@ -253,11 +273,29 @@ local function tool_body(block)
   return nil
 end
 
+-- Tekst podmieniany przez Edit — rdzeń odcina z body wspólne linie kontekstu,
+-- żeby przewinąć i podświetlić dokładnie to, co się zmieniło.
+local function tool_before(block)
+  if block.name == "Edit" then
+    return (block.input or {}).old_string
+  end
+
+  return nil
+end
+
 -- Mapuje pojedynczy obiekt JSON linii na znormalizowane zdarzenia (emit).
-local function parse_object(data, emit)
+local function parse_object(data, emit, ctx)
+  -- CLI wysyła init na starcie KAŻDEJ tury; `ready` (linia "sesja gotowa") tylko
+  -- za pierwszym razem, dalej samo `session` — rdzeń startuje nim spinner tury,
+  -- którą CLI zaczął sam (np. po task_notification zadania w tle).
   if data.type == "system" and data.subtype == "init" then
-    -- oneshot: zapamiętaj id sesji do kontynuacji kolejnej tury (--resume)
-    emit({ kind = "session", session_id = data.session_id })
+    if ctx.ready then
+      emit({ kind = "session", session_id = data.session_id })
+    else
+      ctx.ready = true
+      emit({ kind = "ready", model = data.model, session_id = data.session_id })
+    end
+
     return
   end
 
@@ -319,6 +357,7 @@ local function parse_object(data, emit)
             detail = detail,
             target = tool_target(block),
             body = tool_body(block),
+            before = tool_before(block),
           })
         end
       end
@@ -355,6 +394,7 @@ end
 -- stdout (stream-json jest linia-per-JSON).
 function M.new_decoder()
   local tail = ""
+  local ctx = { ready = false }
 
   return function(data)
     local events = {}
@@ -370,7 +410,7 @@ function M.new_decoder()
         local ok, obj = pcall(vim.fn.json_decode, line)
 
         if ok and type(obj) == "table" and obj.type then
-          parse_object(obj, emit)
+          parse_object(obj, emit, ctx)
         end
       end
     end

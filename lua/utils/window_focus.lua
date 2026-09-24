@@ -57,13 +57,28 @@ end
 -- <M-q>: przełącz focus neo-tree ↔ okno edytora (z pominięciem agenta).
 --   * w neo-tree      → skocz do okna z plikiem (jeśli jakieś jest; jeśli plik
 --                       zamknięty i nie ma innego, focus zostaje — nic nie robimy)
---   * gdziekolwiek indziej (edytor / agent) → skocz do neo-tree; gdy panel nie
---                       jest zadokowany, otwórz go po lewej (jak <leader>E)
+--   * w panelu agenta → skocz do okna z plikiem (drzewka NIE otwieramy)
+--   * w edytorze      → skocz do neo-tree; gdy panel nie jest zadokowany,
+--                       otwórz go po lewej (jak <leader>E)
 function M.toggle_tree_editor()
   local cur = vim.api.nvim_get_current_win()
-  local cur_ft = vim.bo[vim.api.nvim_win_get_buf(cur)].filetype
+  local cur_buf = vim.api.nvim_win_get_buf(cur)
+  local cur_ft = vim.bo[cur_buf].filetype
 
   if cur_ft == "neo-tree" then
+    local fw = file_win()
+
+    if fw then
+      vim.api.nvim_set_current_win(fw)
+    end
+
+    return
+  end
+
+  -- Z panelu agenta <M-q> ma wracać do EDYTORA, nie do drzewka. Wcześniej
+  -- trafiał w gałąź „otwórz neo-tree po lewej", co przy otwartym czacie dokładało
+  -- trzecią kolumnę i na stałe przestawiało neo-tree z float na left.
+  if vim.api.nvim_buf_get_name(cur_buf):match("^agent://") then
     local fw = file_win()
 
     if fw then

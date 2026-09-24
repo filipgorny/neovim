@@ -29,7 +29,9 @@ require("system.agent").setup({
   default = "claude",
   -- editor: żywy nvim + historia + schowek jako narzędzia MCP (mcp/server.js).
   -- Zastąpił trójkę { neovim, history, clipboard } opartą na promptach bash-RPC.
-  skills = { "editor" },
+  -- figma: mockupy z Figmy jako kontekst (design → kod); wymaga jednorazowego
+  -- zalogowania przez /mcp w zwykłym terminalu `claude`.
+  skills = { "editor", "figma" },
 })
 require("system.jira").setup()
 require("system.journal").setup()

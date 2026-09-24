@@ -30,7 +30,17 @@ function M.command(config, opts)
     vim.list_extend(argv, { "-s", opts.session })
   end
 
-  table.insert(argv, opts.message or "")
+  -- opencode nie ma flagi system-promptu — zasady edycji idą przed pierwszą
+  -- wiadomością sesji (kolejne tury mają je już w kontekście). Reszta dopisków
+  -- opisuje narzędzia MCP, których opencode nie dostaje.
+  local message = opts.message or ""
+  local first_turn = not opts.session or opts.session == ""
+
+  if first_turn and config.edit_prompt and config.edit_prompt ~= "" then
+    message = config.edit_prompt .. "\n\n" .. message
+  end
+
+  table.insert(argv, message)
 
   return argv
 end
@@ -51,6 +61,7 @@ local function tool_from_part(part)
   local input = st.input or part.input or {}
   local target = input.filePath or input.file_path or input.path or input.pattern or input.command or ""
   local body = input.content or input.newString or input.new_string
+  local before = input.oldString or input.old_string
   local tool = part.tool or st.tool or part.name or "tool"
   local detail, label
 
@@ -65,6 +76,7 @@ local function tool_from_part(part)
     detail = detail,
     target = target,
     body = body,
+    before = before,
   }
 end
 
@@ -99,7 +111,7 @@ function M.new_decoder()
             emit({ kind = "text", text = part.text })
           elseif d.type == "tool" then
             local tp = tool_from_part(part)
-            emit({ kind = "tool", tool = tp.tool, label = tp.label, detail = tp.detail, target = tp.target, body = tp.body })
+            emit({ kind = "tool", tool = tp.tool, label = tp.label, detail = tp.detail, target = tp.target, body = tp.body, before = tp.before })
           elseif d.type == "step_finish" then
             local tokens = (part.tokens or {}).output
 

@@ -595,11 +595,16 @@ return {
         },
       })
 
+      -- UWAGA: `position` trzeba podawać JAWNIE. Neo-tree zapamiętuje ostatnio
+      -- użytą pozycję w `state.current_position` (command/init.lua) i kolejne
+      -- `Neotree reveal` bez `position=` dziedziczy ją na zawsze — po jednym
+      -- <leader>E (albo <M-q>) pływający panel otwierał się już tylko po lewej.
       vim.keymap.set("n", "<leader>e", function()
-        local ok, err = pcall(vim.cmd, "Neotree reveal")
+        local ok = pcall(vim.cmd, "Neotree reveal position=float")
+
         if not ok then
           -- Jeśli reveal nie działa (np. plik nie istnieje), otwórz Neotree bez reveal
-          vim.cmd("Neotree show")
+          vim.cmd("Neotree show position=float")
         end
       end)
 

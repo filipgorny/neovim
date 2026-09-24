@@ -98,6 +98,11 @@ keymap.bind("n", "<M-j>", "<cmd>BufferLineCycleNext<CR>")
 -- Alt+q: przełącz focus neo-tree ↔ okno z edytowanym plikiem (pomija panel agenta)
 keymap.bind("n", "<M-q>", require("utils.window_focus").toggle_tree_editor)
 
+-- <leader>q: awaryjne wyjście ze wszystkich paneli (czat agenta, panel diffa,
+-- neo-tree, floaty) z powrotem do okna z plikiem. Jeden pewny skrót zamiast
+-- pamiętania, który panel zamyka się czym.
+keymap.bind("n", "<leader>q", require("utils.panic").close_panels)
+
 -- Telescope buffer list sorted by edit time (main buffer picker)
 keymap.bind("n", "<leader>b", function()
   require("utils.telescope_buffers").buffers_by_edit_time()
